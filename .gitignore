@@ -1,0 +1,30 @@
+# CMake, Ninja and all deployed Windows runtime files
+/build/
+/cmake-build-*/
+/CMakeFiles/
+/CMakeCache.txt
+/cmake_install.cmake
+/compile_commands.json
+/build.ninja
+/.ninja_deps
+/.ninja_log
+
+# Downloaded source material used only to regenerate data/dict.bin
+/.cache/
+
+# Optional local OCR runtime. Releases may package it separately.
+/tools/tesseract/
+
+# IDE and editor state
+/.vs/
+/.vscode/
+*.user
+*.user.*
+*.suo
+*.vcxproj.user
+*.code-workspace
+
+# Local logs and crash dumps
+*.log
+*.dmp
+*.stackdump
