@@ -20,7 +20,25 @@ Tesseract 识别英文，通过词典和用户词表筛选出生词，并在顶�
 - `src/DetailsPanel.*`、`src/SettingsDialog.*`：生词列表和设置窗口。
 - `data/`：运行所需的词表和离线词典，应提交到仓库。
 - `tools/`：词典生成、会话检查和真实桌面 UI 冒烟脚本。
+- `tools/bench/`：识别内核基准（4K 语料、Tesseract / RapidOCR / Windows OCR
+  多后端对比、打分脚本和 `REPORT.md` 结论）。
 - `scripts/`：Windows 构建与启动脚本。
+
+## 识别内核约定
+
+调 OCR 参数前先读 `tools/bench/REPORT.md`，改完用 `tools/bench/score.py` 重跑对比。
+
+- **不要加 `tessedit_char_whitelist`。** 白名单不含空格时 LSTM 会丢掉空格，把整行
+  合并成一个词，词典查不到，悬浮栏几乎是空的（F1 8.1%）。加回空格也只有 79.8%，
+  因为数字和标点同样被压制。现在是 F1 99.3%。
+- **不做二值化。** 灰度 + 深色反色直接交给 Tesseract；Otsu 阈值反而低约 1.4 个
+  F1 点，还多花 150–350 ms。
+- **默认不放大**（`ocrScalePercent = 100`）。4K@150% 的字号已经够大；1080p 上的
+  12 px 小字才需要调回 150%。
+- 单线程（`OMP_THREAD_LIMIT=1`）、`--psm 6`、关表格分析、`tessdata_fast`。
+  `tessdata_best` 在屏幕文字上没有更准，慢 2.3 倍。
+- 按空白行切段并行只有 1.3× 加速，却要 3× CPU 且损失 0.3 F1，已否决；
+  RapidOCR 精度相当但慢 5×，Windows OCR 快 3× 但需要 en-US 识别包。
 
 ## 词条交互约定
 

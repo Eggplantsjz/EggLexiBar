@@ -28,3 +28,10 @@
 *.log
 *.dmp
 *.stackdump
+
+# Benchmark scratch space (generated corpus, local OCR models, virtualenv)
+/tools/bench/.venv/
+/tools/bench/models/
+/tools/bench/corpus/png/
+/tools/bench/corpus/html/
+/tools/bench/results/

@@ -1,0 +1,56 @@
+[
+ {
+  "page": "article",
+  "html": "tools/bench/corpus/html/article.html",
+  "png": "tools/bench/corpus/png/article.png",
+  "truth": "tools/bench/corpus/truth/article.json",
+  "unique_tokens": 177,
+  "total_tokens": 246,
+  "rare_tokens": 72
+ },
+ {
+  "page": "code",
+  "html": "tools/bench/corpus/html/code.html",
+  "png": "tools/bench/corpus/png/code.png",
+  "truth": "tools/bench/corpus/truth/code.json",
+  "unique_tokens": 65,
+  "total_tokens": 118,
+  "rare_tokens": 34
+ },
+ {
+  "page": "ui",
+  "html": "tools/bench/corpus/html/ui.html",
+  "png": "tools/bench/corpus/png/ui.png",
+  "truth": "tools/bench/corpus/truth/ui.json",
+  "unique_tokens": 68,
+  "total_tokens": 89,
+  "rare_tokens": 25
+ },
+ {
+  "page": "doc",
+  "html": "tools/bench/corpus/html/doc.html",
+  "png": "tools/bench/corpus/png/doc.png",
+  "truth": "tools/bench/corpus/truth/doc.json",
+  "unique_tokens": 153,
+  "total_tokens": 204,
+  "rare_tokens": 66
+ },
+ {
+  "page": "terminal",
+  "html": "tools/bench/corpus/html/terminal.html",
+  "png": "tools/bench/corpus/png/terminal.png",
+  "truth": "tools/bench/corpus/truth/terminal.json",
+  "unique_tokens": 122,
+  "total_tokens": 217,
+  "rare_tokens": 61
+ },
+ {
+  "page": "dense",
+  "html": "tools/bench/corpus/html/dense.html",
+  "png": "tools/bench/corpus/png/dense.png",
+  "truth": "tools/bench/corpus/truth/dense.json",
+  "unique_tokens": 105,
+  "total_tokens": 180,
+  "rare_tokens": 55
+ }
+]

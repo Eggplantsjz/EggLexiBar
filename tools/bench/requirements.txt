@@ -1,0 +1,6 @@
+# Python packages used by tools/bench. Install into tools/bench/.venv:
+#   python -m venv tools/bench/.venv
+#   tools/bench/.venv/Scripts/python.exe -m pip install -r tools/bench/requirements.txt
+numpy
+pillow
+rapidocr_onnxruntime

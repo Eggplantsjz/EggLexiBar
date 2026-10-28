@@ -12,7 +12,7 @@ struct AppConfig
     int intervalMs = 1500;      ///< delay between two screen scans
     int minWordLength = 3;
     int maxWordLength = 24;
-    int ocrScalePercent = 150;  ///< 100 / 150 / 200  (150% makes small UI text ~21px tall)
+    int ocrScalePercent = 100;  ///< 100 = no upscale; raise for 1080p screens where 12px text is too small
     int psm = 6;                ///< 6 = uniform block of text (best for UI screen grabs)
     int minConfidence = 45;     ///< 0..100  (lowered from 55 so we catch more words)
     int captureMode = 0;        ///< 0 = whole screen, 1 = active window, 2 = cursor region, 3 = custom region

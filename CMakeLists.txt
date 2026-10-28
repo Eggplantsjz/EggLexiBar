@@ -76,6 +76,12 @@ if(WIN32)
         COMMAND "${CMAKE_COMMAND}" -E copy_if_different
                 "${MINGW_BIN_DIR}/libwinpthread-1.dll"
                 "$<TARGET_FILE_DIR:WordLens>/libwinpthread-1.dll"
+        # windeployqt only deploys the platform plugin the GUI app needs. The
+        # console tools (wlocr) run with QT_QPA_PLATFORM=offscreen, so ship that
+        # plugin too - otherwise they abort before printing anything.
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                "${QT_PREFIX}/plugins/platforms/qoffscreen.dll"
+                "$<TARGET_FILE_DIR:WordLens>/platforms/qoffscreen.dll"
         VERBATIM
         COMMENT "Deploying Qt and MinGW runtime DLLs")
 endif()

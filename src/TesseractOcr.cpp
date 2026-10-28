@@ -27,69 +27,18 @@ QStringList executableCandidates()
     return list;
 }
 
-/// Otsu's method: pick the threshold that best separates dark glyphs from a
-/// light background by maximising between-class variance. Gives a per-image
-/// threshold that adapts to the current theme/brightness instead of a hardcoded
-/// value.
-int otsuThreshold(const QImage& img)
-{
-    int hist[256] = {0};
-    const int w = img.width();
-    const int h = img.height();
-    for (int y = 0; y < h; ++y) {
-        const uchar* line = img.constScanLine(y);
-        for (int x = 0; x < w; ++x)
-            ++hist[line[x]];
-    }
-    const int total = w * h;
-    if (total <= 0)
-        return 128;
-
-    double sum = 0.0;
-    for (int i = 0; i < 256; ++i)
-        sum += double(i) * hist[i];
-
-    double sumB = 0.0;
-    int wB = 0;
-    double maxVar = -1.0;
-    int threshold = 128;
-    for (int i = 0; i < 256; ++i) {
-        wB += hist[i];
-        if (wB == 0)
-            continue;
-        const int wF = total - wB;
-        if (wF == 0)
-            break;
-        sumB += double(i) * hist[i];
-        const double mB = sumB / wB;
-        const double mF = (sum - sumB) / wF;
-        const double variance = double(wB) * wF * (mB - mF) * (mB - mF);
-        if (variance > maxVar) {
-            maxVar = variance;
-            threshold = i;
-        }
-    }
-    return threshold;
-}
-
-/// Collapse the grayscale image to crisp black text on white — what Tesseract
-/// recognises best (it struggles with the soft grey ramps of anti-aliased
-/// screen fonts).
-void binarize(QImage& img, int threshold)
-{
-    const int w = img.width();
-    const int h = img.height();
-    for (int y = 0; y < h; ++y) {
-        uchar* line = img.scanLine(y);
-        for (int x = 0; x < w; ++x)
-            line[x] = line[x] < threshold ? 0 : 255;
-    }
-}
-
-/// Gray scale + optional upscaling. Tesseract is noticeably better when the
-/// input is roughly 30+ pixel tall text, so upscaling helps small UI fonts.
-/// Dark backgrounds are inverted, so the tesseract inverter can stay disabled
-/// (that saves a full extra pass over the image).
+/// Gray scale, optional upscaling, and polarity normalisation.
+///
+/// What the kernel deliberately does *not* do any more:
+///
+///  * **binarise.** An Otsu threshold throws away the anti-aliasing ramp the
+///    LSTM engine uses to tell `rn` from `m` or `l` from `I` in 12-13 px UI
+///    text. On the benchmark corpus (tools/bench/REPORT.md) binarising costs
+///    ~1.4 F1 points and 150-350 ms per 4K frame.
+///  * **upscale by default.** A 4K screen at 150% scaling already gives 26-33 px
+///    tall glyphs, which is Tesseract's comfort zone; doubling the pixel count
+///    only doubles the work. The setting stays available for 1080p screens,
+///    where 12 px text really is too small.
 QImage prepareImage(const QImage& source, int scalePercent)
 {
     if (source.isNull())
@@ -107,7 +56,9 @@ QImage prepareImage(const QImage& source, int scalePercent)
             img = img.scaled(target, Qt::IgnoreAspectRatio, Qt::FastTransformation);
     }
 
-    // Mean luminance decides whether the UI uses a dark theme.
+    // Mean luminance decides whether the UI uses a dark theme. Tesseract wants
+    // dark glyphs on a light background, so a dark frame is inverted here; that
+    // lets its own (expensive) inverter stay disabled.
     const int stepX = qMax(1, img.width() / 160);
     const int stepY = qMax(1, img.height() / 90);
     quint64 sum = 0;
@@ -121,10 +72,6 @@ QImage prepareImage(const QImage& source, int scalePercent)
     }
     if (count > 0 && (sum / count) < 110)
         img.invertPixels(QImage::InvertRgb);
-
-    // Binarise to crisp black-on-white. This is the single biggest accuracy win
-    // for anti-aliased screen text.
-    binarize(img, otsuThreshold(img));
 
     return img;
 }
@@ -241,11 +188,13 @@ OcrResult TesseractOcr::recognize(const QImage& image, const AppConfig& cfg)
          << QStringLiteral("-l") << cfg.language
          << QStringLiteral("--psm") << QString::number(cfg.psm)
          << QStringLiteral("--oem") << QStringLiteral("1")
-         // We only ever care about English words (and apostrophes), so pin the
-         // character set — this stops Tesseract from hallucinating digits and
-         // punctuation for ambiguous glyphs.
-         << QStringLiteral("-c")
-         << QStringLiteral("tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'")
+         // No tessedit_char_whitelist here. It looks like a cheap accuracy win
+         // but the LSTM engine treats any character outside the list as
+         // unknown: with letters only it silently drops the spaces and returns
+         // one merged token per line ("everydistributedsystemis..."), which
+         // then fails every dictionary lookup. Measured F1 on the benchmark
+         // corpus: letters-only 8.1%, letters+space 79.8%, no whitelist 99.3%
+         // (tools/bench/REPORT.md).
          // Page layout analysis for tables is expensive and useless for a
          // screen grab; disabling it is a big speed win on large monitors.
          << QStringLiteral("-c") << QStringLiteral("textord_tabfind_find_tables=0")

@@ -95,17 +95,30 @@ blob: 小写单词 + 释义（"音标\n释义1\n释义2..."）
 build\wlocr.exe --define debug copilot
 ```
 
-## 性能说明
+## 识别内核与性能
 
-在 4K（3840×2160）屏幕上实测：
+识别管线：截图 → 灰度 → 深色主题反色 → Tesseract（LSTM、单线程、`--psm 6`、关表格分析）→ 解析 TSV。
+
+两个关键决定都有实测依据，见 [`tools/bench/REPORT.md`](tools/bench/REPORT.md)：
+
+- **不使用 `tessedit_char_whitelist`**。字符白名单不含空格时，LSTM 会把整行合并成一个
+  词（`everydistributedsystemis...`），词典查不到，悬浮栏几乎是空的；把空格加进去也只能
+  到 79.8 F1，因为数字和标点同样被压制。完全去掉白名单后 F1 从 8.1% 升到 99.3%。
+- **不做 Otsu 二值化，默认不放大**。抗锯齿的灰度边缘比阈值图更容易区分 `rn`/`m`、
+  `l`/`I`，二值化反而低约 1.4 个 F1 点，并多花 150–350 ms。
+
+在 4K（3840×2160，150% 缩放）基准语料上实测：
 
 | 场景 | 耗时 |
 | --- | --- |
 | Tesseract 默认多线程 | 约 37 s |
-| 固定单线程 + 关闭表格分析 + 自动反色 | 约 6 s（白底密集文本） |
+| 旧内核（白名单 + 二值化 + 放大 1.5 倍） | 约 2.7 s（F1 8.1%） |
+| 现内核（灰度 + 原分辨率 + psm 6） | 约 2.1 s（F1 99.3%） |
 | 深色背景简单文字 | 约 0.8 s |
+| 按空白行切分 4 段并行 | 1.3× 加速，但 CPU 占用 3×、F1 −0.3，未采用 |
 
 因此默认 `OMP_THREAD_LIMIT=1`，并优先建议使用“当前窗口”或“光标周围 900×560”缩小识别范围。画面没有变化时会直接复用上次结果，不再调用 Tesseract。
+1080p 屏幕上 12 px 小字可以在设置里把“识别精度”调回 150%。
 
 ## 测试
 
@@ -125,6 +138,24 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/test-snooze.ps1
 ```
 
 后三个脚本会驱动真实鼠标，运行时不要同时操作鼠标；`ui-smoke.ps1` 结束时会点“隐藏”，需要重新启动或按 `Ctrl+Alt+W` 才能继续测试。
+
+识别内核的对比测试独立放在 `tools/bench/`，改 OCR 参数前后都应该重跑：
+
+```powershell
+# 渲染 4K 基准语料并生成 ground truth（只需一次）
+python tools/bench/make_corpus.py
+
+# 各后端的识别结果
+python tools/bench/run_tesseract.py
+python tools/bench/run_tesseract_bands.py
+python tools/bench/run_rapidocr.py
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/bench/run_winocr.ps1
+
+# 打分：词袋 P/R/F1、稀有词召回、合并行比例、耗时
+python tools/bench/score.py
+```
+
+`run_rapidocr.py` 需要 `tools/bench/.venv`（见 `tools/bench/requirements.txt`）。
 
 ## 已知限制
 
@@ -154,5 +185,6 @@ src/                应用与核心源码
   main_cli.cpp      wlocr 命令行工具
 data/               词典数据（words_alpha / common-10000 / dict.bin）
 tools/              构建词典、UI 冒烟测试等辅助脚本
+  bench/            识别内核基准：语料生成、多后端 runner、打分与报告
 scripts/            构建 / 运行脚本
 ```
