@@ -128,7 +128,7 @@ OverlayBar::OverlayBar(QWidget* parent)
     outer->setSpacing(4);
 
     auto* row = new QHBoxLayout;
-    row->setSpacing(8);
+    row->setSpacing(6);
 
     m_dot = new StatusDot(this);
     row->addWidget(m_dot, 0, Qt::AlignVCenter);
@@ -304,7 +304,7 @@ void OverlayBar::applyConfig(const AppConfig& cfg)
     // Fixed labels: the bar must not twitch (and drag its buttons sideways)
     // every time the status text or the counter changes.
     const QFontMetrics smallMetrics(smallFont);
-    m_statusWidth = qMax(170, smallMetrics.horizontalAdvance(
+    m_statusWidth = qMax(128, smallMetrics.horizontalAdvance(
                                   QStringLiteral("识别中… 99.9 s")) + 20);
     m_status->setFixedWidth(m_statusWidth);
     m_count->setFixedWidth(smallMetrics.horizontalAdvance(
@@ -314,18 +314,11 @@ void OverlayBar::applyConfig(const AppConfig& cfg)
         chip->setChipFont(wordFont);
 
     const int chipHeight = WordChip::chipHeightFor(wordFont);
-    // Each chip unit stacks an 11px short-def label under the chip, so the bar
-    // needs two rows' worth of height (chip + 3px gap + label + margins).
-    QFont defFont(QStringLiteral("Microsoft YaHei UI"));
-    defFont.setPixelSize(11);
-    const int defHeight = QFontMetrics(defFont).height();
-    const int unitHeight = chipHeight + 3 + defHeight;
-    // The digital pet is 39 px tall; reserve enough room so it is never clipped
-    // even when the font is small and the chip unit alone would be shorter.
+    // Single row of chips (no definition underneath); the digital pet is the
+    // tallest element, so it governs the bar height when the font is small.
     const int petHeight = m_pet ? m_pet->sizeHint().height() : 0;
-    const int minBarHeight = qMax(40, petHeight + 18);
-    setFixedHeight(qMax(minBarHeight, unitHeight + 18));
-    m_scroll->setFixedHeight(unitHeight + 2);
+    setFixedHeight(qMax(chipHeight + 18, petHeight + 18));
+    m_scroll->setFixedHeight(chipHeight + 2);
 
     updateWidth();
     update();
@@ -484,52 +477,6 @@ WordChip* OverlayBar::findChip(const QString& word) const
     return nullptr;
 }
 
-QLabel* OverlayBar::buildChipDefLabel(const WordDefinition& def, QWidget* parent)
-{
-    QString text;
-    for (const QString& rawSense : def.senses) {
-        const QString sense = rawSense.trimmed();
-        if (sense.isEmpty() || sense.startsWith(QStringLiteral("原形："))) continue;
-
-        static const QStringList posList = {
-            QStringLiteral("n."), QStringLiteral("v."), QStringLiteral("vt."),
-            QStringLiteral("vi."), QStringLiteral("a."), QStringLiteral("adj."),
-            QStringLiteral("ad."), QStringLiteral("adv."), QStringLiteral("prep."),
-            QStringLiteral("conj."), QStringLiteral("pron."), QStringLiteral("num."),
-            QStringLiteral("art."), QStringLiteral("interj."), QStringLiteral("int."),
-            QStringLiteral("aux."), QStringLiteral("pref."), QStringLiteral("suf."),
-            QStringLiteral("pl."), QStringLiteral("ph."), QStringLiteral("abbr."),
-        };
-        QString gloss = sense;
-        for (const QString& pos : posList) {
-            if (gloss.startsWith(pos, Qt::CaseInsensitive)) {
-                gloss = gloss.mid(pos.size()).trimmed();
-                break;
-            }
-        }
-        if (gloss.startsWith(QLatin1Char('['))) {
-            const int close = gloss.indexOf(QLatin1Char(']'));
-            if (close > 0) gloss = gloss.mid(close + 1).trimmed();
-        }
-        if (gloss.length() > 10) gloss = gloss.left(10) + QStringLiteral("…");
-        if (!gloss.isEmpty()) { text = gloss; break; }
-    }
-    if (text.isEmpty())
-        return nullptr;
-
-    auto* label = new QLabel(text, parent);
-    // Left-align both the word and its gloss so every chip starts on the same
-    // vertical edge — a clean, columnar look instead of each word floating over
-    // its own off-center definition.
-    label->setAlignment(Qt::AlignLeft | Qt::AlignTop);
-    QFont defFont(QStringLiteral("Microsoft YaHei UI"));
-    defFont.setPixelSize(11);
-    label->setFont(defFont);
-    label->setStyleSheet(QStringLiteral("color:#98A1B4;background:transparent;"));
-    label->adjustSize();
-    return label;
-}
-
 void OverlayBar::syncChips(const QVector<WordEntry>& words)
 {
     // Do not reshuffle the bar while the pointer is on the bar or on the
@@ -576,14 +523,11 @@ void OverlayBar::syncChips(const QVector<WordEntry>& words)
         for (const WordEntry& entry : wanted)
             if (entry.word == chip->word()) { keep = true; break; }
         if (!keep) {
-            QWidget* unit = m_chipUnits.take(chip);
-            if (unit) {
-                m_chipLayout->removeWidget(unit);
-                unit->hide();
-                unit->deleteLater();   // chip is a child of unit, deleted with it
-            }
+            m_chipLayout->removeWidget(chip);
             if (m_card && m_card->isVisible() && m_cardWord == chip->word())
                 hideWordCardNow();
+            chip->hide();
+            chip->deleteLater();
             it = m_chips.erase(it);
         } else {
             ++it;
@@ -595,18 +539,11 @@ void OverlayBar::syncChips(const QVector<WordEntry>& words)
     for (int index = 0; index < wanted.size(); ++index) {
         const WordEntry& entry = wanted.at(index);
         WordChip* chip = byWord.value(entry.word);
-        QWidget* unit = m_chipUnits.value(chip);
         if (!chip) {
-            // New word → a fresh vertical unit: chip on top, short-def label
-            // directly below it. Units pack horizontally with 4px spacing, so
-            // words stay tight while each meaning sits under its own word.
-            unit = new QWidget(m_chipHost);
-            unit->setAutoFillBackground(false);
-            auto* unitLayout = new QVBoxLayout(unit);
-            unitLayout->setContentsMargins(0, 0, 0, 0);
-            unitLayout->setSpacing(3);
-
-            chip = new WordChip(entry.word, unit);
+            // New word → a single chip, directly packed into the strip. Words
+            // are shown with no definition underneath (the meaning appears in
+            // the hover card only).
+            chip = new WordChip(entry.word, m_chipHost);
             QFont wordFont(QStringLiteral("Segoe UI"));
             wordFont.setPixelSize(qBound(10, m_cfg.fontSize, 26));
             chip->setChipFont(wordFont);
@@ -624,25 +561,11 @@ void OverlayBar::syncChips(const QVector<WordEntry>& words)
             connect(chip, &WordChip::hoverStarted, this, &OverlayBar::showWordCard);
             connect(chip, &WordChip::hoverEnded, this, &OverlayBar::hideWordCard);
 
-            unitLayout->addWidget(chip, 0, Qt::AlignLeft);
-            m_chipLayout->addWidget(unit, 0, Qt::AlignTop);
-            m_chipUnits.insert(chip, unit);
+            m_chipLayout->addWidget(chip, 0, Qt::AlignVCenter);
         }
 
         chip->setCount(entry.count);
         chip->setFresh(now - entry.firstSeen < 4000);
-
-        // Build the short-def label once (the definition never changes for a
-        // given word during the session). Reused units already have theirs.
-        if (unit && !unit->findChild<QLabel*>(QString(), Qt::FindDirectChildrenOnly)
-            && m_dictionary && m_dictionary->isLoaded()) {
-            const WordDefinition def = m_dictionary->lookup(entry.word);
-            if (def.isValid()) {
-                QLabel* defLabel = buildChipDefLabel(def, unit);
-                if (defLabel)
-                    unit->layout()->addWidget(defLabel);
-            }
-        }
 
         chip->show();
         m_chips.append(chip);
@@ -664,8 +587,7 @@ void OverlayBar::updateWidth()
     int chipsWidth = 0;
     const int spacing = m_chipLayout->spacing();
     for (WordChip* chip : m_chips) {
-        QWidget* unit = m_chipUnits.value(chip);
-        chipsWidth += unit ? unit->sizeHint().width() : chip->sizeHint().width();
+        chipsWidth += chip->sizeHint().width();
         chipsWidth += spacing;
     }
     if (chipsWidth > 0)

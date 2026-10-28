@@ -70,7 +70,6 @@ protected:
 
 private:
     WordChip* findChip(const QString& word) const;
-    QLabel* buildChipDefLabel(const WordDefinition& def, QWidget* parent);
     void syncChips(const QVector<WordEntry>& words);
     void updateWidth();
     /// True while the pointer is inside the bar (used to freeze layout changes).
@@ -113,7 +112,6 @@ private:
     QTimer* m_cardHideTimer = nullptr;
     QTimer* m_marqueeTimer = nullptr;
     QVector<WordChip*> m_chips;
-    QHash<WordChip*, QWidget*> m_chipUnits;   // chip → its VBox unit (chip + def label)
     const Dictionary* m_dictionary = nullptr;
     DefinitionCard* m_card = nullptr;
     QString m_cardWord;
