@@ -62,7 +62,7 @@ for ($i = 0; $i -lt 60; $i++) {
 }
 if (-not $bar) { throw 'bar not found' }
 
-$chipX = $bar.X + 260
+$chipX = $bar.X + 72
 $chipY = $bar.Y + [int]($bar.H / 2)
 Write-Output ("bar: {0},{1} {2}x{3}  hover: {4},{5}" -f $bar.X, $bar.Y, $bar.W, $bar.H, $chipX, $chipY)
 

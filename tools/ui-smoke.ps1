@@ -90,10 +90,11 @@ function Wait-Bar([int]$timeoutSeconds = 40) {
     return $null
 }
 function Find-Others {
+    # Only WordLens dialogs (settings/details/card). Never touch other apps.
     $list = @()
     foreach ($entry in [W]::Snapshot()) {
         $o = Parse $entry
-        if (-not ($o.Title -eq 'WordLens' -and $o.H -lt 200)) { $list += $o }
+        if ($o.Title -like 'WordLens*' -and -not ($o.Title -eq 'WordLens' -and $o.H -lt 200)) { $list += $o }
     }
     return $list
 }
@@ -111,7 +112,9 @@ function Find-ChipX($bar) {
     Start-Sleep -Milliseconds 300
     $fresh = Find-Bar
     if ($fresh) { $bar = $fresh }
-    for ($x = $bar.X + 330; $x -lt ($bar.X + $bar.W - 180); $x += 30) {
+    # Chips start right after the pet (the status is merged into it now), so the
+    # probe can begin near the left edge instead of the old ~330px offset.
+    for ($x = $bar.X + 72; $x -lt ($bar.X + $bar.W - 180); $x += 30) {
         [void][W]::SetCursorPos($x, $bar.Y + [int]($bar.H / 2))
         Start-Sleep -Milliseconds 460
         if (Find-Card) { return $x }
@@ -174,13 +177,15 @@ function Buttons($b) {
     $scale = [W]::GetDpiForWindow($b.Handle) / 96.0
     if ($scale -le 0) { $scale = 1.0 }
     # 6 buttons now (left→right): pause · scope · adjust · list · settings · hide
-    # Each ~32px center-to-center spacing.
+    # Each button is 24px wide with a 10px gap, so centers are 34px apart. The
+    # adjust button only exists in custom-region mode; the three buttons used by
+    # this script (list/settings/hide) keep the same offsets either way.
     @{
-        pause    = @(($right - [int](182 * $scale)), $midY)
-        scope    = @(($right - [int](150 * $scale)), $midY)
-        adjust   = @(($right - [int](118 * $scale)), $midY)
-        list     = @(($right - [int](86 * $scale)), $midY)
-        settings = @(($right - [int](54 * $scale)), $midY)
+        pause    = @(($right - [int](192 * $scale)), $midY)
+        scope    = @(($right - [int](158 * $scale)), $midY)
+        adjust   = @(($right - [int](124 * $scale)), $midY)
+        list     = @(($right - [int](90 * $scale)), $midY)
+        settings = @(($right - [int](56 * $scale)), $midY)
         hide     = @(($right - [int](22 * $scale)), $midY)
     }
 }

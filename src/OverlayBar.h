@@ -13,11 +13,10 @@
 #include <QWidget>
 
 class QLabel;
-class QScrollArea;
 class QHBoxLayout;
+class QVBoxLayout;
 class QToolButton;
 class QTimer;
-class StatusDot;
 class WordChip;
 class Dictionary;
 class DefinitionCard;
@@ -66,12 +65,16 @@ protected:
     void hideEvent(QHideEvent* event) override;
     void enterEvent(QEnterEvent* event) override;
     void leaveEvent(QEvent* event) override;
-    bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
     WordChip* findChip(const QString& word) const;
     void syncChips(const QVector<WordEntry>& words);
+    /// Recomputes how many chips fit and resizes the bar to its content.
     void updateWidth();
+    /// Shows/hides the textual status; the pet carries the state otherwise.
+    void updateStatusLabel();
+    /// Drives the pet's motion and status dot.
+    void updatePet();
     /// True while the pointer is inside the bar (used to freeze layout changes).
     bool pointerIsOnBar() const;
     /// True while the pointer is close enough to be aiming at the bar.
@@ -79,25 +82,23 @@ private:
     void centerOnScreen();
     void clampToScreen();
     void placeAtSavedPosition();
-    void updateDot();
     void showWordMenu(const QString& word, const QPoint& globalPos);
     void showWordCard(WordChip* chip);
     void hideWordCard(WordChip* chip = nullptr);
     void hideWordCardNow();
     /// Re-applies the newest word list after a frozen (pointer-over-bar) layout.
     void refreshLayout();
+    /// Retries refreshLayout() until the pointer is far enough away to resize.
+    void applyPendingLayout(int attempt);
     void startAutoHideTimer();
-    void updateMarquee();
-    void startMarquee();
-    void stopMarquee();
 
     AppConfig m_cfg;
-    StatusDot* m_dot = nullptr;
+    QVBoxLayout* m_outer = nullptr;
+    QHBoxLayout* m_row = nullptr;
     QLabel* m_status = nullptr;
     PetWidget* m_pet = nullptr;
     QLabel* m_count = nullptr;
     QLabel* m_hint = nullptr;
-    QScrollArea* m_scroll = nullptr;
     QWidget* m_chipHost = nullptr;
     QHBoxLayout* m_chipLayout = nullptr;
     QToolButton* m_moreBtn = nullptr;
@@ -110,7 +111,6 @@ private:
     QTimer* m_autoHideTimer = nullptr;
     QTimer* m_flashTimer = nullptr;
     QTimer* m_cardHideTimer = nullptr;
-    QTimer* m_marqueeTimer = nullptr;
     QVector<WordChip*> m_chips;
     const Dictionary* m_dictionary = nullptr;
     DefinitionCard* m_card = nullptr;
@@ -119,7 +119,6 @@ private:
     QString m_statusText;
     QString m_statusKind = QStringLiteral("idle");
     QString m_flashText;
-    int m_statusWidth = 0;
     QVector<WordEntry> m_lastWords;
     bool m_paused = false;
     bool m_scanning = false;
@@ -127,7 +126,7 @@ private:
     bool m_userMoved = false;
     bool m_dragging = false;
     bool m_dragMoved = false;
-    int m_marqueeDir = 1;
+    bool m_refreshScheduled = false;
     QPoint m_pressGlobal;
     QPoint m_dragOffset;
 };

@@ -25,6 +25,7 @@ public:
     static int chipHeightFor(const QFont& font);
 
     QSize sizeHint() const override;
+    QSize minimumSizeHint() const override;
 
 signals:
     void activated(const QString& word);

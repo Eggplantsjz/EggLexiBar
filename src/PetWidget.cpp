@@ -9,6 +9,9 @@ namespace {
 constexpr int CELL = 3;               // size of one pixel-art cell
 constexpr int COLS = 10;
 constexpr int ROWS = 13;
+constexpr int TOP_MARGIN = 6;         // headroom for the "scanning" bounce
+constexpr int WIDGET_W = COLS * CELL;
+constexpr int WIDGET_H = ROWS * CELL + TOP_MARGIN;
 
 const QColor kStem(0x57, 0xB2, 0x5A);
 const QColor kStemDark(0x3E, 0x8E, 0x43);
@@ -19,12 +22,16 @@ const QColor kWhite(255, 255, 255);
 const QColor kInk(0x2A, 0x24, 0x38);        // eye pupil / outline
 const QColor kMouth(0x3A, 0x1D, 0x5E);      // inside of the mouth
 
+/// One "hop" while the scanner is running. The last frames rest so the motion
+/// reads as a bounce rather than a constant jitter.
+constexpr int kScanBounce[8] = {0, -2, -4, -5, -4, -2, 0, 0};
+
 } // namespace
 
 PetWidget::PetWidget(QWidget* parent)
     : QWidget(parent)
 {
-    setFixedSize(COLS * CELL, ROWS * CELL);
+    setFixedSize(WIDGET_W, WIDGET_H);
     setAutoFillBackground(false);
 
     // Blinks on a 2.2–3.5 s jitter so the pet feels alive but subtle.
@@ -35,13 +42,7 @@ PetWidget::PetWidget(QWidget* parent)
     m_blinkTimer = new QTimer(this);
     m_blinkTimer->setSingleShot(true);
     m_blinkTimer->setInterval(110);
-    connect(m_blinkTimer, &QTimer::timeout, this, [this] {
-        m_state = State::Idle;
-        m_tick = 0;
-        const int next = 2200 + int(QRandomGenerator::global()->bounded(1300));
-        m_blinkTrigger->start(next);
-        update();
-    });
+    connect(m_blinkTimer, &QTimer::timeout, this, &PetWidget::endBlink);
 
     m_eatTimer = new QTimer(this);
     m_eatTimer->setSingleShot(true);
@@ -54,6 +55,14 @@ PetWidget::PetWidget(QWidget* parent)
         update();
     });
 
+    // Runs only while scanning; drives the bob.
+    m_scanTimer = new QTimer(this);
+    m_scanTimer->setInterval(80);
+    connect(m_scanTimer, &QTimer::timeout, this, [this] {
+        ++m_scanTick;
+        update();
+    });
+
     // Kick off the first blink cycle, with a head start so it isn't jarring.
     m_blinkTrigger->start(3200);
 }
@@ -62,16 +71,71 @@ PetWidget::~PetWidget() = default;
 
 QSize PetWidget::sizeHint() const
 {
-    return QSize(COLS * CELL, ROWS * CELL);
+    return QSize(WIDGET_W, WIDGET_H);
+}
+
+void PetWidget::setScanning(bool scanning)
+{
+    if (m_scanning == scanning)
+        return;
+    m_scanning = scanning;
+    if (scanning) {
+        m_scanTick = 0;
+        m_scanTimer->start();
+        m_blinkTrigger->stop();
+        if (m_state == State::Blink) {
+            m_state = State::Idle;
+            m_tick = 0;
+        }
+    } else {
+        m_scanTimer->stop();
+        if (!m_paused && m_state != State::Eating)
+            m_blinkTrigger->start(2200 + int(QRandomGenerator::global()->bounded(1300)));
+    }
+    update();
+}
+
+void PetWidget::setPaused(bool paused)
+{
+    if (m_paused == paused)
+        return;
+    m_paused = paused;
+    if (paused) {
+        m_blinkTimer->stop();
+        m_blinkTrigger->stop();
+        if (m_state == State::Blink) {
+            m_state = State::Idle;
+            m_tick = 0;
+        }
+    } else if (!m_scanning && m_state != State::Eating) {
+        m_blinkTrigger->start(1600 + int(QRandomGenerator::global()->bounded(900)));
+    }
+    update();
+}
+
+void PetWidget::setStatusColor(const QColor& color)
+{
+    if (m_statusColor == color)
+        return;
+    m_statusColor = color;
+    update();
 }
 
 void PetWidget::startBlink()
 {
-    if (m_state == State::Eating)
+    if (m_state == State::Eating || m_scanning || m_paused)
         return;
     m_state = State::Blink;
     m_tick = 0;
     m_blinkTimer->start();
+    update();
+}
+
+void PetWidget::endBlink()
+{
+    m_state = State::Idle;
+    m_tick = 0;
+    m_blinkTrigger->start(2200 + int(QRandomGenerator::global()->bounded(1300)));
     update();
 }
 
@@ -93,7 +157,8 @@ void PetWidget::endEating()
     m_animateTimer->stop();
     m_state = State::Idle;
     m_tick = 0;
-    m_blinkTrigger->start(2600 + int(QRandomGenerator::global()->bounded(1200)));
+    if (!m_scanning && !m_paused)
+        m_blinkTrigger->start(2600 + int(QRandomGenerator::global()->bounded(1200)));
     update();
 }
 
@@ -102,13 +167,16 @@ void PetWidget::paintEvent(QPaintEvent*)
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing, false); // crisp pixel edges
 
-    // Body vertical offset: a little "gulp" dip while swallowing.
-    int dy = 0;
+    // Vertical offset: TOP_MARGIN leaves headroom for the scanning hop; eating
+    // adds a little "gulp" dip on top of it.
+    int dy = TOP_MARGIN;
     if (m_state == State::Eating) {
         if (m_tick >= 4 && m_tick <= 6)
-            dy = 2;
+            dy += 2;
         else if (m_tick == 7)
-            dy = -2;
+            dy -= 2;
+    } else if (m_scanning && !m_paused) {
+        dy += kScanBounce[m_scanTick % 8];
     }
 
     auto cell = [&](int x, int y, const QColor& c) {
@@ -150,7 +218,8 @@ void PetWidget::paintEvent(QPaintEvent*)
     cell(2, 4, kBodyLight);   // small glint on the upper-left
 
     // --- face ---
-    const bool eyesClosed = (m_state == State::Blink) || (m_state == State::Eating);
+    const bool eyesClosed = (m_state == State::Blink) || (m_state == State::Eating)
+                            || m_paused;
     if (eyesClosed) {
         // Closed eyes = short horizontal lines.
         cell(3, 5, kInk); cell(4, 5, kInk);
@@ -178,4 +247,19 @@ void PetWidget::paintEvent(QPaintEvent*)
         cell(4, 8, kInk); cell(5, 8, kInk);
         cell(4, 9, kBodyDark); cell(5, 9, kBodyDark);
     }
+
+    // --- status LED at the feet ---
+    p.setRenderHint(QPainter::Antialiasing, true);
+    const bool pulse = m_scanning && !m_paused && (m_scanTick % 8) < 4;
+    const QPointF led(WIDGET_W - 4.0, WIDGET_H - 4.0);
+    QColor glow = m_statusColor;
+    glow.setAlpha(pulse ? 90 : 55);
+    p.setPen(Qt::NoPen);
+    p.setBrush(glow);
+    p.drawEllipse(led, pulse ? 5.6 : 5.0, pulse ? 5.6 : 5.0);
+    p.setBrush(m_statusColor);
+    p.drawEllipse(led, 2.6, 2.6);
+    p.setPen(QPen(QColor(0, 0, 0, 110), 1));
+    p.setBrush(Qt::NoBrush);
+    p.drawEllipse(led, 2.6, 2.6);
 }

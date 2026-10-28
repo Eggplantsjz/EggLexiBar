@@ -13,6 +13,9 @@ WordChip::WordChip(const QString& word, QWidget* parent)
 {
     m_font.setFamily(QStringLiteral("Segoe UI"));
     m_font.setPixelSize(13);
+    // Pills must never be squeezed by the layout: paintEvent() draws at fixed
+    // coordinates, so a narrower widget would clip the word instead of eliding it.
+    setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
     setCursor(Qt::PointingHandCursor);
     setAttribute(Qt::WA_Hover, true);
     setMouseTracking(true);
@@ -54,7 +57,9 @@ void WordChip::markCopied()
 void WordChip::setChipFont(const QFont& font)
 {
     m_font = font;
-    m_padX = qMax(9, font.pixelSize() * 3 / 4);
+    // Roomy left/right padding keeps neighbouring pills visually separated even
+    // when two short words sit next to each other.
+    m_padX = qMax(10, font.pixelSize());
     setFixedHeight(chipHeightFor(font));
     updateGeometry();
     update();
@@ -73,6 +78,11 @@ QSize WordChip::sizeHint() const
     if (m_count > 1)
         width += fm.horizontalAdvance(QStringLiteral("×%1").arg(m_count)) + 8;
     return QSize(width, chipHeightFor(m_font));
+}
+
+QSize WordChip::minimumSizeHint() const
+{
+    return sizeHint();
 }
 
 void WordChip::paintEvent(QPaintEvent*)

@@ -18,83 +18,18 @@
 #include <QPainter>
 #include <QLinearGradient>
 #include <QScreen>
-#include <QScrollArea>
-#include <QScrollBar>
 #include <QTimer>
 #include <QToolButton>
-#include <QWheelEvent>
+#include <QVBoxLayout>
 
-class StatusDot : public QWidget
-{
-public:
-    explicit StatusDot(QWidget* parent = nullptr)
-        : QWidget(parent)
-    {
-        setFixedSize(12, 12);
-        m_timer.setInterval(420);
-        QObject::connect(&m_timer, &QTimer::timeout, this, [this] {
-            m_phase = !m_phase;
-            update();
-        });
-    }
+namespace {
 
-    void setColor(const QColor& color)
-    {
-        if (m_color == color)
-            return;
-        m_color = color;
-        update();
-    }
+const QColor kIdleColor(74, 222, 128);    // green
+const QColor kScanColor(122, 162, 247);   // blue
+const QColor kWarnColor(251, 191, 36);    // amber
+const QColor kErrorColor(248, 113, 113);  // red
 
-    void setAnimated(bool animated)
-    {
-        if (animated == m_timer.isActive())
-            return;
-        if (animated)
-            m_timer.start();
-        else
-            m_timer.stop();
-        m_phase = true;
-        update();
-    }
-
-protected:
-    void paintEvent(QPaintEvent*) override
-    {
-        QPainter p(this);
-        p.setRenderHint(QPainter::Antialiasing, true);
-        p.setPen(Qt::NoPen);
-
-        QColor glow = m_color;
-        glow.setAlpha(m_timer.isActive() && !m_phase ? 30 : 70);
-        p.setBrush(glow);
-        p.drawEllipse(QRectF(0, 0, width(), height()));
-
-        QColor core = m_color;
-        if (m_timer.isActive() && !m_phase)
-            core.setAlpha(140);
-        p.setBrush(core);
-        p.drawEllipse(QPointF(width() / 2.0, height() / 2.0), 3.4, 3.4);
-    }
-
-private:
-    QTimer m_timer;
-    QColor m_color{0x4A, 0xDE, 0x80};
-    bool m_phase = true;
-};
-
-QColor colorForKind(const QString& kind)
-{
-    if (kind == QLatin1String("ok"))
-        return QColor(74, 222, 128);
-    if (kind == QLatin1String("warn"))
-        return QColor(251, 191, 36);
-    if (kind == QLatin1String("error"))
-        return QColor(248, 113, 113);
-    if (kind == QLatin1String("scan"))
-        return QColor(122, 162, 247);
-    return QColor(138, 147, 166);
-}
+} // namespace
 
 QToolButton* makeToolButton(QWidget* parent, const QString& glyph, const QString& tooltip)
 {
@@ -120,57 +55,39 @@ OverlayBar::OverlayBar(QWidget* parent)
     setWindowTitle(QStringLiteral("WordLens"));
     setMouseTracking(true);
 
-    // Outer layout: a single row of status/chips/buttons. The chip zone itself is
-    // a scroll area whose children are vertical units (word chip above, short
-    // meaning below), so definitions sit directly under their own word.
-    auto* outer = new QVBoxLayout(this);
-    outer->setContentsMargins(14, 8, 14, 10);
-    outer->setSpacing(4);
+    // Single row: pet (status + mascot in one), optional message, word pills,
+    // then the counter and the button cluster on the right.
+    m_outer = new QVBoxLayout(this);
+    m_outer->setContentsMargins(12, 4, 10, 4);
+    m_outer->setSpacing(0);
 
-    auto* row = new QHBoxLayout;
-    row->setSpacing(6);
+    m_row = new QHBoxLayout;
+    m_row->setSpacing(10);
 
-    m_dot = new StatusDot(this);
-    row->addWidget(m_dot, 0, Qt::AlignVCenter);
-
-    m_status = new QLabel(QStringLiteral("准备中…"), this);
-    m_status->setObjectName(QStringLiteral("barStatus"));
-    m_status->setMinimumWidth(72);
-    row->addWidget(m_status, 0, Qt::AlignVCenter);
-
-    // Digital pet (pixel-art eggplant) sits between the recognition status and
-    // the words. It eats a word whenever the user swipes one up/down.
+    // The pixel-art eggplant doubles as the recognition indicator: it bobs while
+    // scanning and carries a small status LED, so there is no separate dot or
+    // permanent status label eating space on the left.
     m_pet = new PetWidget(this);
-    row->addWidget(m_pet, 0, Qt::AlignVCenter);
-    row->addSpacing(2);
+    m_row->addWidget(m_pet, 0, Qt::AlignVCenter);
+
+    // Only errors, the paused state and transient messages need words. The label
+    // is hidden otherwise, letting the words start right next to the pet.
+    m_status = new QLabel(this);
+    m_status->setObjectName(QStringLiteral("barStatus"));
+    m_status->hide();
+    m_row->addWidget(m_status, 0, Qt::AlignVCenter);
 
     m_hint = new QLabel(QStringLiteral("等屏幕上的英文出现生词…"), this);
     m_hint->setObjectName(QStringLiteral("barHint"));
-    row->addWidget(m_hint, 0, Qt::AlignVCenter);
+    m_row->addWidget(m_hint, 0, Qt::AlignVCenter);
 
-    m_scroll = new QScrollArea(this);
-    m_scroll->setObjectName(QStringLiteral("barScroll"));
-    m_scroll->setFrameShape(QFrame::NoFrame);
-    m_scroll->setWidgetResizable(true);
-    m_scroll->setFocusPolicy(Qt::NoFocus);
-    m_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    m_scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    m_scroll->viewport()->setAutoFillBackground(false);
-    m_scroll->setStyleSheet(QStringLiteral(
-        "QScrollArea{background:transparent;border:none;}"
-        "QScrollArea > QWidget > QWidget{background:transparent;}"));
-    m_scroll->hide();
-
-    m_chipHost = new QWidget;
+    m_chipHost = new QWidget(this);
     m_chipHost->setAutoFillBackground(false);
-    // Tight horizontal packing (4px) between chip units. Each unit is a small
-    // QVBoxLayout that stacks the chip on top of its short-def label, so the
-    // meaning sits directly under the word without grid column stretching.
     m_chipLayout = new QHBoxLayout(m_chipHost);
     m_chipLayout->setContentsMargins(0, 0, 0, 0);
-    m_chipLayout->setSpacing(6);
-    m_scroll->setWidget(m_chipHost);
-    row->addWidget(m_scroll, 1, Qt::AlignVCenter);
+    m_chipLayout->setSpacing(10);
+    m_chipHost->hide();
+    m_row->addWidget(m_chipHost, 0, Qt::AlignVCenter);
 
     m_moreBtn = new QToolButton(this);
     m_moreBtn->setObjectName(QStringLiteral("barMore"));
@@ -182,12 +99,14 @@ OverlayBar::OverlayBar(QWidget* parent)
     m_moreBtn->setFont(moreFont);
     m_moreBtn->setToolTip(QStringLiteral("还有更多待处理生词，点击打开列表"));
     m_moreBtn->hide();
-    row->addWidget(m_moreBtn, 0, Qt::AlignVCenter);
+    m_row->addWidget(m_moreBtn, 0, Qt::AlignVCenter);
+
+    m_row->addStretch(1);
 
     m_count = new QLabel(QStringLiteral("0 生词"), this);
     m_count->setObjectName(QStringLiteral("barCount"));
     m_count->setToolTip(QStringLiteral("本次识别到的生词数量"));
-    row->addWidget(m_count, 0, Qt::AlignVCenter);
+    m_row->addWidget(m_count, 0, Qt::AlignVCenter);
 
     m_pauseBtn = makeToolButton(this, QStringLiteral("❚❚"), QStringLiteral("暂停 / 继续识别"));
     m_scopeBtn = makeToolButton(this, QStringLiteral("▢"), QStringLiteral("识别范围：全屏（点击切换）"));
@@ -196,15 +115,14 @@ OverlayBar::OverlayBar(QWidget* parent)
     m_listBtn = makeToolButton(this, QStringLiteral("☰"), QStringLiteral("生词列表"));
     m_settingsBtn = makeToolButton(this, QStringLiteral("⚙"), QStringLiteral("设置"));
     m_hideBtn = makeToolButton(this, QStringLiteral("✕"), QStringLiteral("隐藏状态栏（Ctrl+Alt+W 唤回）"));
-    row->addWidget(m_pauseBtn);
-    row->addWidget(m_scopeBtn);
-    row->addWidget(m_adjustBtn);
-    row->addWidget(m_listBtn);
-    row->addWidget(m_settingsBtn);
-    row->addWidget(m_hideBtn);
-    row->addStretch(0);
+    m_row->addWidget(m_pauseBtn);
+    m_row->addWidget(m_scopeBtn);
+    m_row->addWidget(m_adjustBtn);
+    m_row->addWidget(m_listBtn);
+    m_row->addWidget(m_settingsBtn);
+    m_row->addWidget(m_hideBtn);
 
-    outer->addLayout(row, 0);
+    m_outer->addLayout(m_row, 0);
 
     setStyleSheet(QStringLiteral(
         "QLabel#barStatus{color:#C6CDDB;}"
@@ -256,31 +174,6 @@ OverlayBar::OverlayBar(QWidget* parent)
         m_flashText.clear();
         setStatus(m_statusText, m_statusKind);
     });
-
-    // Auto "marquee": while there are more words than fit on screen, slowly
-    // scroll the chip strip back and forth. Pauses when the pointer is over the
-    // bar so the user can read/hover/click a word without it sliding away.
-    m_marqueeTimer = new QTimer(this);
-    m_marqueeTimer->setInterval(30);
-    connect(m_marqueeTimer, &QTimer::timeout, this, [this] {
-        if (!m_scroll || !m_scroll->isVisible())
-            return;
-        QScrollBar* bar = m_scroll->horizontalScrollBar();
-        const int max = bar->maximum();
-        const int min = bar->minimum();
-        if (max <= min) {
-            m_marqueeTimer->stop();
-            return;
-        }
-        const int next = bar->value() + m_marqueeDir;
-        if (next >= max)
-            m_marqueeDir = -1;
-        else if (next <= min)
-            m_marqueeDir = 1;
-        bar->setValue(qBound(min, next, max));
-    });
-
-    m_scroll->viewport()->installEventFilter(this);
 }
 
 void OverlayBar::applyConfig(const AppConfig& cfg)
@@ -301,12 +194,8 @@ void OverlayBar::applyConfig(const AppConfig& cfg)
     m_count->setFont(smallFont);
     m_hint->setFont(smallFont);
 
-    // Fixed labels: the bar must not twitch (and drag its buttons sideways)
-    // every time the status text or the counter changes.
+    // The counter keeps a fixed width so scans do not jiggle the buttons.
     const QFontMetrics smallMetrics(smallFont);
-    m_statusWidth = qMax(128, smallMetrics.horizontalAdvance(
-                                  QStringLiteral("识别中… 99.9 s")) + 20);
-    m_status->setFixedWidth(m_statusWidth);
     m_count->setFixedWidth(smallMetrics.horizontalAdvance(
                                QStringLiteral("888 生词")) + 6);
 
@@ -314,16 +203,16 @@ void OverlayBar::applyConfig(const AppConfig& cfg)
         chip->setChipFont(wordFont);
 
     const int chipHeight = WordChip::chipHeightFor(wordFont);
-    // Single row of chips (no definition underneath); the digital pet is the
-    // tallest element, so it governs the bar height when the font is small.
+    // Single row of chips; the pixel-art pet is the tallest element, so it
+    // governs the bar height when the font is small.
     const int petHeight = m_pet ? m_pet->sizeHint().height() : 0;
-    setFixedHeight(qMax(chipHeight + 18, petHeight + 18));
-    m_scroll->setFixedHeight(chipHeight + 2);
+    setFixedHeight(qMax(chipHeight + 18, petHeight + 12));
 
+    // Update the capture-mode button visibility before measuring the row, so
+    // the custom-region "adjust" button is included in the width.
+    setCaptureMode(m_cfg.captureMode);
     updateWidth();
     update();
-
-    setCaptureMode(m_cfg.captureMode);
 
     if (!m_cfg.barPosSet)
         centerOnScreen();
@@ -342,39 +231,77 @@ void OverlayBar::setStatus(const QString& text, const QString& kind)
 {
     m_statusText = text;
     m_statusKind = kind;
-
-    const QString shown = m_flashText.isEmpty() ? text : m_flashText;
-    const QFontMetrics fm(m_status->font());
-    const int width = m_statusWidth > 0 ? m_statusWidth : 262;
-    m_status->setText(fm.elidedText(shown, Qt::ElideRight, width));
-    m_status->setToolTip(shown);
-    m_status->setStyleSheet(m_flashText.isEmpty()
-                                ? QString()
-                                : QStringLiteral("color:#9CC1FF;"));
-    updateDot();
+    updateStatusLabel();
+    updatePet();
 }
 
-void OverlayBar::updateDot()
+void OverlayBar::updateStatusLabel()
 {
+    const bool flash = !m_flashText.isEmpty();
+    const QString shown = flash ? m_flashText : m_statusText;
+    const bool important = flash
+                           || m_statusKind == QLatin1String("error")
+                           || m_statusKind == QLatin1String("warn")
+                           || m_statusKind == QLatin1String("paused");
+    const bool wantVisible = important && !shown.isEmpty();
+    const bool visible = m_status->isVisible();
+
+    // Do not grow/shrink the bar while the pointer is on it: that would slide the
+    // buttons out from under a click in progress. The pending message is applied
+    // by refreshLayout() once the pointer leaves.
+    if (visible != wantVisible && pointerIsNearBar())
+        return;
+
+    if (!wantVisible) {
+        m_status->hide();
+        if (visible)
+            updateWidth();
+        return;
+    }
+
+    const QFontMetrics fm(m_status->font());
+    m_status->setText(fm.elidedText(shown, Qt::ElideRight, 300));
+    m_status->setToolTip(shown);
+    if (flash)
+        m_status->setStyleSheet(QStringLiteral("color:#9CC1FF;"));
+    else if (m_statusKind == QLatin1String("error"))
+        m_status->setStyleSheet(QStringLiteral("color:#FCA5A5;"));
+    else
+        m_status->setStyleSheet(QStringLiteral("color:#FCD34D;"));
+    m_status->show();
+    updateWidth();
+}
+
+void OverlayBar::updatePet()
+{
+    if (!m_pet)
+        return;
+
+    const bool scanning = m_scanning && !m_paused && m_engineReady;
+    m_pet->setPaused(m_paused);
+    m_pet->setScanning(scanning);
+
+    QColor color = kIdleColor;
+    QString tip = QStringLiteral("WordLens · 空闲");
     if (!m_engineReady) {
-        m_dot->setColor(colorForKind(QStringLiteral("error")));
-        m_dot->setAnimated(false);
-        return;
+        color = kErrorColor;
+        tip = QStringLiteral("未找到 Tesseract，请在设置中指定");
+    } else if (m_paused) {
+        color = kWarnColor;
+        tip = QStringLiteral("已暂停识别");
+    } else if (scanning) {
+        color = kScanColor;
+        tip = QStringLiteral("正在识别屏幕…");
     }
-    if (m_paused) {
-        m_dot->setColor(colorForKind(QStringLiteral("warn")));
-        m_dot->setAnimated(false);
-        return;
-    }
-    m_dot->setColor(colorForKind(m_scanning ? QStringLiteral("scan") : m_statusKind));
-    m_dot->setAnimated(m_scanning);
+    m_pet->setStatusColor(color);
+    m_pet->setToolTip(tip);
 }
 
 void OverlayBar::setPaused(bool paused)
 {
     m_paused = paused;
     m_pauseBtn->setText(paused ? QStringLiteral("▶") : QStringLiteral("❚❚"));
-    updateDot();
+    updatePet();
 }
 
 void OverlayBar::setCaptureMode(int mode)
@@ -403,13 +330,13 @@ void OverlayBar::setScanning(bool scanning)
     if (m_scanning == scanning)
         return;
     m_scanning = scanning;
-    updateDot();
+    updatePet();
 }
 
 void OverlayBar::setEngineReady(bool ready)
 {
     m_engineReady = ready;
-    updateDot();
+    updatePet();
 }
 
 void OverlayBar::flashMessage(const QString& text)
@@ -436,25 +363,11 @@ void OverlayBar::setWords(const QVector<WordEntry>& words)
     // out from under the cursor. The pending state is applied as soon as the
     // pointer leaves (see refreshLayout()).
     //
-    // An empty bar is the exception: with no chips there is nothing to keep
-    // steady, and freezing here would leave the bar blank ("N 生词", no words)
-    // until the pointer happens to move away.
-    if (!m_chips.isEmpty()
+    // An empty word list is the exception: there is no chip to click any more,
+    // and freezing would leave stale words on screen indefinitely.
+    if (!m_chips.isEmpty() && !words.isEmpty()
         && (pointerIsNearBar() || (m_card && m_card->isVisible())))
         return;
-
-    // With the auto marquee we no longer truncate to the on-screen chip budget;
-    // show everything (up to a sane cap) and let the strip scroll.
-    const int limit = qBound(1, words.size(), 60);
-    const int overflow = qMax(0, words.size() - limit);
-    m_moreBtn->setText(QStringLiteral("+%1").arg(overflow));
-    m_moreBtn->setVisible(overflow > 0);
-    // When overflow is shown the "+N" button already communicates "N more";
-    // hiding the plain count avoids redundant info and keeps the button group tight.
-    m_count->setVisible(overflow == 0);
-    if (overflow > 0) {
-        m_moreBtn->setToolTip(QStringLiteral("还有 %1 个待处理生词，点击打开列表").arg(overflow));
-    }
 
     syncChips(words);
     updateWidth();
@@ -462,10 +375,28 @@ void OverlayBar::setWords(const QVector<WordEntry>& words)
 
 void OverlayBar::refreshLayout()
 {
-    QTimer::singleShot(0, this, [this] {
-        if (!m_lastWords.isEmpty())
-            setWords(m_lastWords);
-    });
+    if (m_refreshScheduled)
+        return;
+    m_refreshScheduled = true;
+    applyPendingLayout(0);
+}
+
+void OverlayBar::applyPendingLayout(int attempt)
+{
+    // The layout is only frozen while the pointer is close, and that zone is
+    // larger than the bar itself: a pointer parked just below it would never
+    // fire another leaveEvent, so retry a few times instead of waiting for
+    // one. After the last attempt we apply anyway to avoid stale chips.
+    if (pointerIsNearBar() && attempt < 20) {
+        QTimer::singleShot(350, this, [this, attempt] {
+            applyPendingLayout(attempt + 1);
+        });
+        return;
+    }
+
+    m_refreshScheduled = false;
+    updateStatusLabel();
+    setWords(m_lastWords);
 }
 
 WordChip* OverlayBar::findChip(const QString& word) const
@@ -506,8 +437,8 @@ void OverlayBar::syncChips(const QVector<WordEntry>& words)
         return;
     }
 
-    // Cap matches setWords()'s marquee budget so the strip scrolls instead of
-    // truncating into a "+N" button.
+    // A hard cap keeps widget churn bounded; updateWidth() decides how many of
+    // these actually fit and collapses the rest into the "+N" pill.
     const int limit = qBound(1, words.size(), 60);
     QVector<WordEntry> wanted = words.mid(0, limit);
 
@@ -574,41 +505,103 @@ void OverlayBar::syncChips(const QVector<WordEntry>& words)
 
 void OverlayBar::updateWidth()
 {
+    const bool hasChips = !m_chips.isEmpty();
+    const bool cardOpen = m_card && m_card->isVisible();
+
     // Never resize the bar while the pointer is on or near it (or while a card
     // is open): the right-hand buttons would slide out from under the cursor
     // and the user would click the wrong one. The pending layout is applied by
     // the first update after the pointer moves away.
-    if (m_scroll->isVisible()
-        && (pointerIsNearBar() || (m_card && m_card->isVisible()))) {
+    if (hasChips && (pointerIsNearBar() || cardOpen)) {
         clampToScreen();
         return;
     }
 
-    int chipsWidth = 0;
-    const int spacing = m_chipLayout->spacing();
-    for (WordChip* chip : m_chips) {
-        chipsWidth += chip->sizeHint().width();
-        chipsWidth += spacing;
-    }
-    if (chipsWidth > 0)
-        chipsWidth -= spacing;
-
-    if (m_chips.isEmpty()) {
+    if (!hasChips)
         hideWordCardNow();
-        m_scroll->hide();
-        m_hint->show();
-    } else {
-        m_hint->hide();
-        m_scroll->show();
-        const int screenWidth = screen() ? screen()->availableGeometry().width() : 1920;
-        const int maxWidth = qBound(300, qMin(1180, screenWidth - 360), 1400);
-        m_scroll->setFixedWidth(qBound(90, chipsWidth, maxWidth));
+    m_hint->setVisible(!hasChips);
+    // With no words at all the hint already says everything; a lone "0 生词"
+    // next to it is just noise.
+    m_count->setVisible(hasChips);
+
+    QScreen* target = screen() ? screen() : QGuiApplication::primaryScreen();
+    const int screenWidth = target ? target->availableGeometry().width() : 1920;
+    const int maxBarWidth = qBound(420, qMin(1240, screenWidth - 200), 1400);
+
+    // Measure everything that is not a word pill. Hidden widgets are ignored by
+    // the layout, so take the strip and the "+N" pill out of the equation first;
+    // their space is budgeted separately. The widths are summed by hand instead
+    // of asking the row layout, whose cached sizeHint can still contain the
+    // hidden chip strip and would collapse the strip to a single pill.
+    m_chipHost->hide();
+    m_moreBtn->hide();
+    int fixedWidth = 0;
+    int fixedWidgets = 0;
+    const auto addFixed = [&](QWidget* widget) {
+        if (!widget || widget->isHidden())
+            return;
+        fixedWidth += widget->sizeHint().width();
+        ++fixedWidgets;
+    };
+    addFixed(m_pet);
+    addFixed(m_status);
+    addFixed(m_hint);
+    addFixed(m_count);
+    addFixed(m_pauseBtn);
+    addFixed(m_scopeBtn);
+    addFixed(m_adjustBtn);
+    addFixed(m_listBtn);
+    addFixed(m_settingsBtn);
+    addFixed(m_hideBtn);
+    const QMargins margins = m_outer->contentsMargins();
+    fixedWidth += margins.left() + margins.right();
+    // Gaps: between every fixed widget, plus one slot for the strip and one for
+    // the "+N" pill (the right-side stretch adds one more).
+    fixedWidth += (fixedWidgets + 3) * m_row->spacing();
+
+    const QFontMetrics moreMetrics(m_moreBtn->font());
+    const int moreWidth = moreMetrics.horizontalAdvance(QStringLiteral("+888")) + 26;
+    const int baseBudget = qMax(120, maxBarWidth - fixedWidth);
+
+    // Show as many pills as fit, whole. Never compress a pill: its text would
+    // be clipped (the old scroll-area layout did exactly that). Only reserve
+    // room for the "+N" pill when something actually has to be hidden, so a bar
+    // that fits everything does not waste a slot.
+    const int cap = qBound(1, m_cfg.maxChips, 40);
+    const int spacing = m_chipLayout->spacing();
+    const auto countFitting = [&](int budget) {
+        int used = 0;
+        int count = 0;
+        for (WordChip* chip : m_chips) {
+            if (count >= cap)
+                break;
+            const int extra = chip->sizeHint().width() + (count > 0 ? spacing : 0);
+            if (count > 0 && used + extra > budget)
+                break;
+            used += extra;
+            ++count;
+        }
+        return count;
+    };
+
+    const int total = qMax(m_lastWords.size(), m_chips.size());
+    int visible = countFitting(baseBudget - moreWidth);
+    if (visible >= total)
+        visible = countFitting(baseBudget);
+
+    for (int i = 0; i < m_chips.size(); ++i)
+        m_chips.at(i)->setVisible(i < visible);
+
+    if (hasChips && visible < total) {
+        const int hidden = total - visible;
+        m_moreBtn->setText(QStringLiteral("+%1").arg(hidden));
+        m_moreBtn->setToolTip(
+            QStringLiteral("还有 %1 个生词未显示，点击打开列表").arg(hidden));
+        m_moreBtn->show();
     }
 
+    m_chipHost->setVisible(hasChips);
     adjustSize();
-
-    // Start/stop the auto marquee now that the strip width is final.
-    updateMarquee();
 
     // Keep the bar centred while its width changes; it is only resized when the
     // pointer is away, so this cannot yank the bar from under the cursor.
@@ -691,9 +684,8 @@ void OverlayBar::showWordMenu(const QString& word, const QPoint& globalPos)
 
 void OverlayBar::showWordCard(WordChip* chip)
 {
-    // Hover chip → show the detailed floating DefinitionCard (full senses,
-    // phonetic, origin tags, action buttons). The short gloss is always
-    // visible under each chip in row 1 — this is the detailed view.
+    // Hover chip → show the floating DefinitionCard (full senses, phonetic,
+    // origin tags, action buttons). The bar itself only shows the bare words.
     if (m_cardHideTimer) m_cardHideTimer->stop();
     if (!chip || !isVisible() || !m_dictionary || !m_dictionary->isLoaded())
         return;
@@ -836,7 +828,6 @@ void OverlayBar::hideEvent(QHideEvent* event)
 void OverlayBar::enterEvent(QEnterEvent* event)
 {
     m_autoHideTimer->stop();
-    stopMarquee();
     QWidget::enterEvent(event);
 }
 
@@ -845,7 +836,6 @@ void OverlayBar::leaveEvent(QEvent* event)
     startAutoHideTimer();
     // The layout was frozen while the pointer was here; catch up now.
     refreshLayout();
-    updateMarquee();
     QWidget::leaveEvent(event);
 }
 
@@ -855,48 +845,4 @@ void OverlayBar::startAutoHideTimer()
         return;
     if (m_cfg.autoHide && isVisible())
         m_autoHideTimer->start(qMax(3, m_cfg.autoHideSeconds) * 1000);
-}
-
-void OverlayBar::startMarquee()
-{
-    if (!m_marqueeTimer || !m_scroll || !m_scroll->isVisible())
-        return;
-    if (underMouse() || (m_card && m_card->isVisible()))
-        return;
-    QScrollBar* bar = m_scroll->horizontalScrollBar();
-    if (bar->maximum() > bar->minimum())
-        m_marqueeTimer->start();
-}
-
-void OverlayBar::stopMarquee()
-{
-    if (m_marqueeTimer)
-        m_marqueeTimer->stop();
-}
-
-void OverlayBar::updateMarquee()
-{
-    if (!m_scroll || !m_scroll->isVisible()) {
-        stopMarquee();
-        return;
-    }
-    QScrollBar* bar = m_scroll->horizontalScrollBar();
-    if (bar->maximum() > bar->minimum() && !underMouse()
-        && !(m_card && m_card->isVisible()))
-        startMarquee();
-    else
-        stopMarquee();
-}
-
-bool OverlayBar::eventFilter(QObject* watched, QEvent* event)
-{
-    if (watched == m_scroll->viewport() && event->type() == QEvent::Wheel) {
-        auto* wheel = static_cast<QWheelEvent*>(event);
-        QScrollBar* bar = m_scroll->horizontalScrollBar();
-        const int delta = wheel->angleDelta().y() != 0 ? wheel->angleDelta().y()
-                                                       : wheel->angleDelta().x();
-        bar->setValue(bar->value() - delta / 2);
-        return true;
-    }
-    return QWidget::eventFilter(watched, event);
 }

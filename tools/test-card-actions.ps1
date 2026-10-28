@@ -80,7 +80,7 @@ Write-Output ("bar: {0},{1} {2}x{3}" -f $bar.X, $bar.Y, $bar.W, $bar.H)
 
 # Probe horizontally until a chip opens the card.
 $found = $false
-for ($x = $bar.X + 330; $x -lt ($bar.X + $bar.W - 150); $x += 34) {
+for ($x = $bar.X + 72; $x -lt ($bar.X + $bar.W - 150); $x += 34) {
     [void][WC]::SetCursorPos($x, $bar.Y + [int]($bar.H / 2))
     Start-Sleep -Milliseconds 480
     if (Card) { $found = $true; Write-Output ("chip hovering at x={0}" -f $x); break }
