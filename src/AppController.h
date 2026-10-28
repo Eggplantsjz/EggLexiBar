@@ -74,9 +74,11 @@ private:
     void blockWords(const QStringList& words);
     void openDetails();
     void openSettings();
+    void openRegionSelector();
     void updateBarStatus();
     int activeTtlMs() const;
     void refreshWords();
+    QVector<WordEntry> sortedByDifficulty(QVector<WordEntry> words) const;
     QRect interestRect(const QRect& screenGeometry) const;
     QVector<QRect> exclusionRects(const QSize& imageSize, const QPoint& imageOffset) const;
 
@@ -111,4 +113,6 @@ private:
     QImage m_lastThumb;
     QPoint m_lastCropOffset;
     QElapsedTimer m_scanClock;
+    QString m_lastNearestWord;   ///< for auto-card: track word under cursor
+    QTimer* m_nearestCardTimer = nullptr;  ///< auto-hide the nearest-word card after 1s
 };

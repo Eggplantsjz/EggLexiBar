@@ -37,6 +37,7 @@ AppConfig loadConfig()
     cfg.psm = s.value(QStringLiteral("ocr/psm"), cfg.psm).toInt();
     cfg.minConfidence = s.value(QStringLiteral("ocr/minConfidence"), cfg.minConfidence).toInt();
     cfg.captureMode = s.value(QStringLiteral("ocr/captureMode"), cfg.captureMode).toInt();
+    cfg.customRegion = s.value(QStringLiteral("ocr/customRegion"), QRect()).toRect();
     cfg.language = s.value(QStringLiteral("ocr/language"), cfg.language).toString();
     cfg.tesseractPath = s.value(QStringLiteral("ocr/tesseractPath"), cfg.tesseractPath).toString();
 
@@ -52,11 +53,13 @@ AppConfig loadConfig()
     cfg.activeTtlSeconds = s.value(QStringLiteral("ui/ttlSeconds"), cfg.activeTtlSeconds).toInt();
     cfg.keepUntilHandled =
         s.value(QStringLiteral("ui/keepUntilHandled"), cfg.keepUntilHandled).toBool();
-    cfg.autoSnooze = s.value(QStringLiteral("ui/autoSnooze"), cfg.autoSnooze).toBool();
-    cfg.autoSnoozeScans =
-        s.value(QStringLiteral("ui/autoSnoozeScans"), cfg.autoSnoozeScans).toInt();
-    cfg.autoSnoozeSeconds =
-        s.value(QStringLiteral("ui/autoSnoozeSeconds"), cfg.autoSnoozeSeconds).toInt();
+    cfg.autoFilter = s.value(QStringLiteral("ui/autoFilter"), cfg.autoFilter).toBool();
+    cfg.autoFilterScans =
+        s.value(QStringLiteral("ui/autoFilterScans"), cfg.autoFilterScans).toInt();
+    cfg.autoFilterSeconds =
+        s.value(QStringLiteral("ui/autoFilterSeconds"), cfg.autoFilterSeconds).toInt();
+    cfg.autoFilterState =
+        s.value(QStringLiteral("ui/autoFilterState"), cfg.autoFilterState).toStringList();
     cfg.autoHide = s.value(QStringLiteral("ui/autoHide"), cfg.autoHide).toBool();
     cfg.autoHideSeconds = s.value(QStringLiteral("ui/autoHideSeconds"), cfg.autoHideSeconds).toInt();
 
@@ -79,6 +82,7 @@ void saveConfig(const AppConfig& cfg)
     s.setValue(QStringLiteral("ocr/psm"), cfg.psm);
     s.setValue(QStringLiteral("ocr/minConfidence"), cfg.minConfidence);
     s.setValue(QStringLiteral("ocr/captureMode"), cfg.captureMode);
+    s.setValue(QStringLiteral("ocr/customRegion"), cfg.customRegion);
     s.setValue(QStringLiteral("ocr/language"), cfg.language);
     s.setValue(QStringLiteral("ocr/tesseractPath"), cfg.tesseractPath);
 
@@ -93,9 +97,10 @@ void saveConfig(const AppConfig& cfg)
     s.setValue(QStringLiteral("ui/opacity"), cfg.opacityPercent);
     s.setValue(QStringLiteral("ui/ttlSeconds"), cfg.activeTtlSeconds);
     s.setValue(QStringLiteral("ui/keepUntilHandled"), cfg.keepUntilHandled);
-    s.setValue(QStringLiteral("ui/autoSnooze"), cfg.autoSnooze);
-    s.setValue(QStringLiteral("ui/autoSnoozeScans"), cfg.autoSnoozeScans);
-    s.setValue(QStringLiteral("ui/autoSnoozeSeconds"), cfg.autoSnoozeSeconds);
+    s.setValue(QStringLiteral("ui/autoFilter"), cfg.autoFilter);
+    s.setValue(QStringLiteral("ui/autoFilterScans"), cfg.autoFilterScans);
+    s.setValue(QStringLiteral("ui/autoFilterSeconds"), cfg.autoFilterSeconds);
+    s.setValue(QStringLiteral("ui/autoFilterState"), cfg.autoFilterState);
     s.setValue(QStringLiteral("ui/autoHide"), cfg.autoHide);
     s.setValue(QStringLiteral("ui/autoHideSeconds"), cfg.autoHideSeconds);
     s.setValue(QStringLiteral("ui/barPosSet"), cfg.barPosSet);

@@ -173,8 +173,12 @@ function Buttons($b) {
     $midY = $b.Y + [int]($b.H / 2)
     $scale = [W]::GetDpiForWindow($b.Handle) / 96.0
     if ($scale -le 0) { $scale = 1.0 }
+    # 6 buttons now (left→right): pause · scope · adjust · list · settings · hide
+    # Each ~32px center-to-center spacing.
     @{
-        pause    = @(($right - [int](118 * $scale)), $midY)
+        pause    = @(($right - [int](182 * $scale)), $midY)
+        scope    = @(($right - [int](150 * $scale)), $midY)
+        adjust   = @(($right - [int](118 * $scale)), $midY)
         list     = @(($right - [int](86 * $scale)), $midY)
         settings = @(($right - [int](54 * $scale)), $midY)
         hide     = @(($right - [int](22 * $scale)), $midY)

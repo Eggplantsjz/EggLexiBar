@@ -1,5 +1,8 @@
 #include "DetailsPanel.h"
 
+#include "Dictionary.h"
+
+#include <QCheckBox>
 #include <QClipboard>
 #include <QDateTime>
 #include <QGuiApplication>
@@ -7,6 +10,7 @@
 #include <QHeaderView>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QTableWidget>
 #include <QTime>
@@ -29,6 +33,14 @@ DetailsPanel::DetailsPanel(QWidget* parent)
     m_search->setPlaceholderText(QStringLiteral("搜索单词…"));
     m_search->setClearButtonEnabled(true);
     topRow->addWidget(m_search, 1);
+
+    auto* pinBox = new QCheckBox(QStringLiteral("置顶"), this);
+    pinBox->setToolTip(QStringLiteral("保持在其他窗口之上"));
+    connect(pinBox, &QCheckBox::toggled, this, [this](bool checked) {
+        setWindowFlag(Qt::WindowStaysOnTopHint, checked);
+        show();
+    });
+    topRow->addWidget(pinBox);
 
     m_summary = new QLabel(this);
     m_summary->setStyleSheet(QStringLiteral("color:#98A1B4;"));
@@ -97,6 +109,14 @@ DetailsPanel::DetailsPanel(QWidget* parent)
         const QStringList words = selectedWords();
         if (words.isEmpty())
             return;
+        if (words.size() > 5) {
+            const auto ret = QMessageBox::warning(
+                this, QStringLiteral("确认忽略"),
+                QStringLiteral("将永久隐藏 %1 个词，确定吗？").arg(words.size()),
+                QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+            if (ret != QMessageBox::Yes)
+                return;
+        }
         emit blockRequested(words);
         m_feedback->setText(QStringLiteral("已隐藏 %1 个词").arg(words.size()));
     });
@@ -125,6 +145,13 @@ void DetailsPanel::setEntries(const QVector<WordEntry>& entries)
     rebuild();
 }
 
+void DetailsPanel::setDictionary(const Dictionary* dictionary)
+{
+    m_dictionary = dictionary;
+    if (m_dictionary && !m_entries.isEmpty())
+        rebuild();
+}
+
 void DetailsPanel::rebuild()
 {
     const QString filter = m_search->text().trimmed().toLower();
@@ -136,11 +163,11 @@ void DetailsPanel::rebuild()
     }
 
     int totalHits = 0;
-    int snoozed = 0;
+    int filtered = 0;
     for (const WordEntry& entry : m_entries) {
         totalHits += entry.count;
-        if (entry.snoozed)
-            ++snoozed;
+        if (entry.autoFiltered)
+            ++filtered;
     }
 
     m_table->setSortingEnabled(false);
@@ -153,13 +180,33 @@ void DetailsPanel::rebuild()
 
         auto* wordItem = new QTableWidgetItem(entry.word);
         wordItem->setData(Qt::UserRole, entry.word);
+        if (m_dictionary && m_dictionary->isLoaded()) {
+            const WordDefinition def = m_dictionary->lookup(entry.word);
+            if (def.isValid()) {
+                QString tip = entry.word;
+                if (!def.phonetic.isEmpty())
+                    tip += QStringLiteral("  /%1/").arg(def.phonetic);
+                // Show up to 4 senses, first sense on next line for readability
+                const int maxSenses = qMin(def.senses.size(), 4);
+                for (int i = 0; i < maxSenses; ++i) {
+                    tip += QStringLiteral("\n· %1").arg(def.senses.at(i));
+                }
+                if (def.senses.size() > maxSenses)
+                    tip += QStringLiteral("\n… 共 %1 条释义").arg(def.senses.size());
+                wordItem->setToolTip(tip);
+            } else {
+                wordItem->setToolTip(QStringLiteral("词典中暂无释义"));
+            }
+        } else {
+            wordItem->setToolTip(QStringLiteral("词典未加载"));
+        }
         auto* countItem = new QTableWidgetItem;
         countItem->setData(Qt::DisplayRole, entry.count);
         auto* statusItem =
-            new QTableWidgetItem(entry.snoozed ? QStringLiteral("疑似已掌握")
-                                               : QStringLiteral("待处理"));
-        statusItem->setForeground(entry.snoozed ? QColor(0x98, 0xA1, 0xB4)
-                                                : QColor(0x4A, 0xDE, 0x80));
+            new QTableWidgetItem(entry.autoFiltered ? QStringLiteral("已自动过滤")
+                                                   : QStringLiteral("待处理"));
+        statusItem->setForeground(entry.autoFiltered ? QColor(0x98, 0xA1, 0xB4)
+                                                     : QColor(0x4A, 0xDE, 0x80));
         auto* timeItem = new QTableWidgetItem(
             QDateTime::fromMSecsSinceEpoch(entry.firstSeen)
                 .toString(QStringLiteral("HH:mm:ss")));
@@ -171,9 +218,9 @@ void DetailsPanel::rebuild()
     }
     m_table->setSortingEnabled(true);
 
-    m_summary->setText(QStringLiteral("%1 待处理 · %2 已收起 · %3 次")
-                           .arg(m_entries.size() - snoozed)
-                           .arg(snoozed)
+    m_summary->setText(QStringLiteral("%1 待处理 · %2 已过滤 · %3 次")
+                           .arg(m_entries.size() - filtered)
+                           .arg(filtered)
                            .arg(totalHits));
 
     if (!selected.isEmpty()) {

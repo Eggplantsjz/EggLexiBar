@@ -5,6 +5,7 @@
 #include <QDialog>
 #include <QVector>
 
+class Dictionary;
 class QLabel;
 class QLineEdit;
 class QTableWidget;
@@ -17,6 +18,7 @@ public:
     explicit DetailsPanel(QWidget* parent = nullptr);
 
     void setEntries(const QVector<WordEntry>& entries);
+    void setDictionary(const Dictionary* dictionary);
 
 signals:
     void clearRequested();
@@ -30,6 +32,7 @@ private:
     void copyWords(const QStringList& words);
 
     QVector<WordEntry> m_entries;
+    const Dictionary* m_dictionary = nullptr;
     QTableWidget* m_table = nullptr;
     QLineEdit* m_search = nullptr;
     QLabel* m_summary = nullptr;

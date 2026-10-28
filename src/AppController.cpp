@@ -3,6 +3,7 @@
 #include "DetailsPanel.h"
 #include "HotkeyFilter.h"
 #include "OverlayBar.h"
+#include "RegionSelector.h"
 #include "SettingsDialog.h"
 #include "WindowUtils.h"
 
@@ -61,6 +62,42 @@ bool isExcluded(const QRect& box, const QVector<QRect>& excludes)
     return false;
 }
 
+// Persisted filter state uses "word|filterCount|hiddenUntilMs" entries so it
+// survives a restart and the memory curve keeps advancing across sessions.
+WordSession::PersistFilter parseFilterState(const QStringList& entries)
+{
+    WordSession::PersistFilter map;
+    for (const QString& entry : entries) {
+        const QStringList parts = entry.split(QLatin1Char('|'));
+        if (parts.size() != 3)
+            continue;
+        const QString word = parts.at(0);
+        if (word.isEmpty())
+            continue;
+        bool okCount = false;
+        bool okUntil = false;
+        const int count = parts.at(1).toInt(&okCount);
+        const qint64 until = parts.at(2).toLongLong(&okUntil);
+        if (!okCount || !okUntil)
+            continue;
+        map.insert(word, qMakePair(count, until));
+    }
+    return map;
+}
+
+QStringList serializeFilterState(const WordSession::PersistFilter& map)
+{
+    QStringList entries;
+    entries.reserve(map.size());
+    for (auto it = map.constBegin(); it != map.constEnd(); ++it) {
+        entries.append(QStringLiteral("%1|%2|%3")
+                           .arg(it.key())
+                           .arg(it.value().first)
+                           .arg(it.value().second));
+    }
+    return entries;
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -96,6 +133,7 @@ AppController::AppController(QObject* parent)
 {
     m_cfg = loadConfig();
     m_filter.setConfig(m_cfg);
+    m_session.setPersistFilter(parseFilterState(m_cfg.autoFilterState));
 }
 
 AppController::~AppController()
@@ -152,6 +190,23 @@ void AppController::createUi()
     m_bar = new OverlayBar;
 
     connect(m_bar, &OverlayBar::pauseToggled, this, [this] { setPaused(!m_paused); });
+    connect(m_bar, &OverlayBar::captureModeToggled, this, [this] {
+        m_cfg.captureMode = (m_cfg.captureMode + 1) % 4;
+        // If we cycle TO custom region without one yet, auto-open the selector.
+        if (m_cfg.captureMode == 3 && m_cfg.customRegion.isEmpty()) {
+            saveConfig(m_cfg);
+            m_bar->applyConfig(m_cfg);
+            m_bar->flashMessage(QStringLiteral("请拖动鼠标框选识别区域"));
+            // Defer the overlay so the hide animation doesn't get covered.
+            QTimer::singleShot(180, this, &AppController::openRegionSelector);
+            return;
+        }
+        saveConfig(m_cfg);
+        m_bar->flashMessage(QStringLiteral("识别范围已切换"));
+        m_timer->start(qMax(300, m_cfg.intervalMs));
+        QTimer::singleShot(200, this, &AppController::tick);
+    });
+    connect(m_bar, &OverlayBar::regionSelectRequested, this, &AppController::openRegionSelector);
     connect(m_bar, &OverlayBar::detailsRequested, this, &AppController::openDetails);
     connect(m_bar, &OverlayBar::settingsRequested, this, &AppController::openSettings);
     connect(m_bar, &OverlayBar::copyRequested, this, &AppController::copyWord);
@@ -394,6 +449,11 @@ QRect AppController::interestRect(const QRect& screenGeometry) const
         QRect rect = cursorRegionRect(QSize(900, 560)).intersected(screenGeometry);
         if (rect.isValid())
             return rect;
+    } else if (m_cfg.captureMode == 3 && m_cfg.customRegion.isValid()
+               && !m_cfg.customRegion.isEmpty()) {
+        QRect rect = m_cfg.customRegion.intersected(screenGeometry);
+        if (rect.width() > 60 && rect.height() > 40)
+            return rect;
     }
     return screenGeometry;
 }
@@ -423,14 +483,24 @@ void AppController::handleOcr(const OcrResult& result, qint64 stamp)
             continue;
         if (isExcluded(hit.box, excludes))
             continue;
-        const QString word = m_filter.normalize(hit.text);
+
+        // OCR is noisy: run through a repair pass that tries common
+        // character confusables (0↔o, 1↔l, ...) before we decide whether
+        // this word is worth showing. The repaired spelling is what gets
+        // stored in the session — so "analys1" becomes "analysl" which
+        // normalizes to the real dictionary entry.
+        QString repaired;
+        const WordDefinition def = m_dictionary.lookupRepaired(hit.text, &repaired);
+        if (!def.isValid())
+            continue;   // no dictionary match even after repair → pure OCR noise
+
+        const QString word = m_filter.normalize(repaired.isEmpty() ? hit.text : repaired);
         if (word.isEmpty())
             continue;
         ++englishCount;
         if (!m_filter.isInteresting(word))
             continue;
-        if (!isListableWord(m_dictionary, word))
-            continue;
+
         WordHit filtered;
         filtered.text = word;
         filtered.box = hit.box;
@@ -438,20 +508,51 @@ void AppController::handleOcr(const OcrResult& result, qint64 stamp)
         kept.append(filtered);
     }
 
+    // --- Proximity boost: words closer to the cursor get merged first so they
+    //     stay at the front of the session (top of the bar) instead of being
+    //     pushed down by every newer scan.
+    if (!kept.isEmpty()) {
+        const QPoint cursor = QCursor::pos();
+        // WordHit.box is in image-local coords; m_lastCropOffset translates back
+        // to absolute screen coords so distance comparisons are consistent.
+        const QPoint cursorInImage = cursor - m_lastCropOffset;
+        std::stable_sort(kept.begin(), kept.end(),
+                         [&](const WordHit& a, const WordHit& b) {
+                             const QPoint ca = a.box.center();
+                             const QPoint cb = b.box.center();
+                             const int da = (ca - cursorInImage).manhattanLength();
+                             const int db = (cb - cursorInImage).manhattanLength();
+                             return da < db;
+                         });
+    }
+
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
     m_session.ingest(kept, now);
+
+    // Reactivate words whose memory-curve interval has elapsed, then hide words
+    // that keep appearing without any user interaction. Auto-filtering never
+    // touches knownWords — only an explicit swipe/menu/list action marks known.
+    m_session.resurface(now);
     int retired = 0;
-    if (m_cfg.autoSnooze) {
-        retired = m_session.autoSnooze(now, m_cfg.autoSnoozeScans,
-                                       qMax(0, m_cfg.autoSnoozeSeconds) * 1000);
+    if (m_cfg.autoFilter) {
+        retired = m_session.autoFilter(now, m_cfg.autoFilterScans,
+                                       qMax(0, m_cfg.autoFilterSeconds) * 1000);
     }
-    const QVector<WordEntry> active = m_session.active(now, activeTtlMs());
+
+    // Persist filter state so the curve keeps advancing across restarts.
+    const QStringList serialized = serializeFilterState(m_session.persistFilter());
+    if (serialized != m_cfg.autoFilterState) {
+        m_cfg.autoFilterState = serialized;
+        saveConfig(m_cfg);
+    }
+
+    const QVector<WordEntry> active = sortedByDifficulty(m_session.active(now, activeTtlMs()));
     m_bar->setWords(active);
     m_lastElapsedMs = result.elapsedMs;
     m_lastActiveWords = active.size();
     updateBarStatus();
     if (retired > 0) {
-        m_bar->flashMessage(QStringLiteral("已收起 %1 个词 · 列表可恢复").arg(retired));
+        m_bar->flashMessage(QStringLiteral("已自动过滤 %1 个词 · 稍后会重现").arg(retired));
     }
 
     if (m_details && m_details->isVisible())
@@ -485,7 +586,25 @@ int AppController::activeTtlMs() const
 
 void AppController::refreshWords()
 {
-    m_bar->setWords(m_session.active(QDateTime::currentMSecsSinceEpoch(), activeTtlMs()));
+    m_bar->setWords(sortedByDifficulty(
+        m_session.active(QDateTime::currentMSecsSinceEpoch(), activeTtlMs())));
+}
+
+QVector<WordEntry> AppController::sortedByDifficulty(QVector<WordEntry> words) const
+{
+    // Rarer words first (larger difficultyRank = harder), so the user sees the
+    // words they're most likely to need before the ones they already pass over.
+    std::stable_sort(words.begin(), words.end(),
+                     [this](const WordEntry& a, const WordEntry& b) {
+                         const int ra = m_filter.difficultyRank(a.word);
+                         const int rb = m_filter.difficultyRank(b.word);
+                         if (ra != rb)
+                             return ra > rb;
+                         if (a.count != b.count)
+                             return a.count > b.count;
+                         return a.firstSeen > b.firstSeen;
+                     });
+    return words;
 }
 
 void AppController::applyConfig(bool persist)
@@ -579,6 +698,7 @@ void AppController::openDetails()
 {
     if (!m_details) {
         m_details = new DetailsPanel;
+        m_details->setDictionary(&m_dictionary);
         connect(m_details, &DetailsPanel::clearRequested, this, [this] {
             m_session.clear();
             m_bar->setWords({});
@@ -600,10 +720,8 @@ void AppController::openDetails()
                 [this](const QStringList& words) {
                     int restored = 0;
                     for (const QString& word : words) {
-                        if (m_session.setSnoozed(word, false)) {
-                            m_session.touchInteraction(word);
+                        if (m_session.restoreWord(word))
                             ++restored;
-                        }
                     }
                     if (restored > 0) {
                         refreshWords();
@@ -618,10 +736,66 @@ void AppController::openDetails()
     m_details->activateWindow();
 }
 
+void AppController::openRegionSelector()
+{
+    // Stop scanning while the overlay is shown, otherwise we'd keep taking
+    // captures of the dimmed fullscreen selector.
+    const bool wasPaused = m_paused;
+    if (!wasPaused) setPaused(true);
+
+    auto* sel = new RegionSelector;
+    sel->showFullScreen();
+    sel->raise();
+    sel->activateWindow();
+    connect(sel, &RegionSelector::regionSelected, this,
+            [this, wasPaused](const QRect& rect) {
+                m_cfg.captureMode = 3;
+                m_cfg.customRegion = rect.normalized();
+                saveConfig(m_cfg);
+                m_bar->applyConfig(m_cfg);
+                m_bar->flashMessage(QStringLiteral("识别区域已保存 · %1×%2")
+                                        .arg(rect.width()).arg(rect.height()));
+                if (!wasPaused) {
+                    setPaused(false);
+                    m_timer->start(qMax(300, m_cfg.intervalMs));
+                    QTimer::singleShot(200, this, &AppController::tick);
+                }
+            });
+    connect(sel, &RegionSelector::cancelled, this, [this, wasPaused] {
+        if (!wasPaused) setPaused(false);
+    });
+    // Delete on close so we don't accumulate overlays if the user triggers
+    // selection while one is still open.
+    connect(sel, &RegionSelector::destroyed, this, [this] {
+        // Nothing — just letting Qt clean up.
+    });
+}
+
 void AppController::openSettings()
 {
-    if (!m_settings)
+    if (!m_settings) {
         m_settings = new SettingsDialog;
+        // Live preview: visual-setting changes repaint the overlay bar immediately,
+        // but we must save/restore its position because applyConfig re-centers
+        // the bar every time.
+        connect(m_settings, &SettingsDialog::previewRequested, this,
+                [this](const AppConfig& cfg) {
+                    const QPoint savedPos = m_bar->pos();
+                    m_bar->applyConfig(cfg);
+                    // applyConfig may re-center or jump the bar — restore to where the user had it
+                    m_bar->move(savedPos);
+                    // force clamp within screen bounds
+                    if (const QScreen* s = m_bar->screen()) {
+                        const QRect avail = s->availableGeometry();
+                        int nx = qBound(avail.left(), m_bar->x(), avail.right() - m_bar->width());
+                        int ny = qBound(avail.top(), m_bar->y(), avail.bottom() - m_bar->height());
+                        if (nx != m_bar->x() || ny != m_bar->y())
+                            m_bar->move(nx, ny);
+                    }
+                });
+    }
+
+    const AppConfig before = m_cfg;
 
     m_settings->setConfig(m_cfg);
     TesseractOcr probe(m_cfg.tesseractPath);
@@ -631,6 +805,9 @@ void AppController::openSettings()
     if (m_settings->exec() == QDialog::Accepted) {
         m_cfg = m_settings->config();
         applyConfig(true);
+    } else {
+        // Revert any live preview changes back to the config before the dialog.
+        m_bar->applyConfig(before);
     }
 }
 

@@ -99,12 +99,12 @@ Copy-Item $ini $backup -Force
 
 try {
     $text = Get-Content $ini -Raw
-    $text = $text -replace 'autoSnoozeScans=\d+', 'autoSnoozeScans=2'
-    $text = $text -replace 'autoSnoozeSeconds=\d+', 'autoSnoozeSeconds=6'
+    $text = $text -replace 'autoFilterScans=\d+', 'autoFilterScans=2'
+    $text = $text -replace 'autoFilterSeconds=\d+', 'autoFilterSeconds=6'
     $text = $text -replace 'keepUntilHandled=\w+', 'keepUntilHandled=true'
-    $text = $text -replace 'autoSnooze=\w+', 'autoSnooze=true'
+    $text = $text -replace 'autoFilter=\w+', 'autoFilter=true'
     Set-Content $ini $text -NoNewline
-    Write-Output 'config: autoSnoozeScans=2 autoSnoozeSeconds=6'
+    Write-Output 'config: autoFilterScans=2 autoFilterSeconds=6'
 
     # --- 2. a page whose text stays put while the screen still changes -----
     $page = Join-Path $env:TEMP 'wordlens-snooze.html'

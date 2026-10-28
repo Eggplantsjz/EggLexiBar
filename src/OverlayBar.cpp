@@ -2,6 +2,7 @@
 
 #include "DefinitionCard.h"
 #include "Dictionary.h"
+#include "PetWidget.h"
 #include "WordChip.h"
 
 #include <QApplication>
@@ -15,6 +16,7 @@
 #include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QLinearGradient>
 #include <QScreen>
 #include <QScrollArea>
 #include <QScrollBar>
@@ -118,21 +120,33 @@ OverlayBar::OverlayBar(QWidget* parent)
     setWindowTitle(QStringLiteral("WordLens"));
     setMouseTracking(true);
 
-    auto* root = new QHBoxLayout(this);
-    root->setContentsMargins(12, 6, 10, 6);
-    root->setSpacing(8);
+    // Outer layout: a single row of status/chips/buttons. The chip zone itself is
+    // a scroll area whose children are vertical units (word chip above, short
+    // meaning below), so definitions sit directly under their own word.
+    auto* outer = new QVBoxLayout(this);
+    outer->setContentsMargins(14, 8, 14, 10);
+    outer->setSpacing(4);
+
+    auto* row = new QHBoxLayout;
+    row->setSpacing(8);
 
     m_dot = new StatusDot(this);
-    root->addWidget(m_dot, 0, Qt::AlignVCenter);
+    row->addWidget(m_dot, 0, Qt::AlignVCenter);
 
     m_status = new QLabel(QStringLiteral("准备中…"), this);
     m_status->setObjectName(QStringLiteral("barStatus"));
     m_status->setMinimumWidth(72);
-    root->addWidget(m_status, 0, Qt::AlignVCenter);
+    row->addWidget(m_status, 0, Qt::AlignVCenter);
 
-    m_hint = new QLabel(QStringLiteral("把英文显示在屏幕上，生词会自动出现在这里"), this);
+    // Digital pet (pixel-art eggplant) sits between the recognition status and
+    // the words. It eats a word whenever the user swipes one up/down.
+    m_pet = new PetWidget(this);
+    row->addWidget(m_pet, 0, Qt::AlignVCenter);
+    row->addSpacing(2);
+
+    m_hint = new QLabel(QStringLiteral("等屏幕上的英文出现生词…"), this);
     m_hint->setObjectName(QStringLiteral("barHint"));
-    root->addWidget(m_hint, 0, Qt::AlignVCenter);
+    row->addWidget(m_hint, 0, Qt::AlignVCenter);
 
     m_scroll = new QScrollArea(this);
     m_scroll->setObjectName(QStringLiteral("barScroll"));
@@ -149,12 +163,14 @@ OverlayBar::OverlayBar(QWidget* parent)
 
     m_chipHost = new QWidget;
     m_chipHost->setAutoFillBackground(false);
+    // Tight horizontal packing (4px) between chip units. Each unit is a small
+    // QVBoxLayout that stacks the chip on top of its short-def label, so the
+    // meaning sits directly under the word without grid column stretching.
     m_chipLayout = new QHBoxLayout(m_chipHost);
     m_chipLayout->setContentsMargins(0, 0, 0, 0);
     m_chipLayout->setSpacing(6);
-    m_chipLayout->addStretch(1);
     m_scroll->setWidget(m_chipHost);
-    root->addWidget(m_scroll, 1, Qt::AlignVCenter);
+    row->addWidget(m_scroll, 1, Qt::AlignVCenter);
 
     m_moreBtn = new QToolButton(this);
     m_moreBtn->setObjectName(QStringLiteral("barMore"));
@@ -166,34 +182,49 @@ OverlayBar::OverlayBar(QWidget* parent)
     m_moreBtn->setFont(moreFont);
     m_moreBtn->setToolTip(QStringLiteral("还有更多待处理生词，点击打开列表"));
     m_moreBtn->hide();
-    root->addWidget(m_moreBtn, 0, Qt::AlignVCenter);
+    row->addWidget(m_moreBtn, 0, Qt::AlignVCenter);
 
     m_count = new QLabel(QStringLiteral("0 生词"), this);
     m_count->setObjectName(QStringLiteral("barCount"));
     m_count->setToolTip(QStringLiteral("本次识别到的生词数量"));
-    root->addWidget(m_count, 0, Qt::AlignVCenter);
+    row->addWidget(m_count, 0, Qt::AlignVCenter);
 
     m_pauseBtn = makeToolButton(this, QStringLiteral("❚❚"), QStringLiteral("暂停 / 继续识别"));
+    m_scopeBtn = makeToolButton(this, QStringLiteral("▢"), QStringLiteral("识别范围：全屏（点击切换）"));
+    m_adjustBtn = makeToolButton(this, QStringLiteral("⊞"), QStringLiteral("拖动调整识别区域"));
+    m_adjustBtn->hide();
     m_listBtn = makeToolButton(this, QStringLiteral("☰"), QStringLiteral("生词列表"));
     m_settingsBtn = makeToolButton(this, QStringLiteral("⚙"), QStringLiteral("设置"));
     m_hideBtn = makeToolButton(this, QStringLiteral("✕"), QStringLiteral("隐藏状态栏（Ctrl+Alt+W 唤回）"));
-    root->addWidget(m_pauseBtn);
-    root->addWidget(m_listBtn);
-    root->addWidget(m_settingsBtn);
-    root->addWidget(m_hideBtn);
+    row->addWidget(m_pauseBtn);
+    row->addWidget(m_scopeBtn);
+    row->addWidget(m_adjustBtn);
+    row->addWidget(m_listBtn);
+    row->addWidget(m_settingsBtn);
+    row->addWidget(m_hideBtn);
+    row->addStretch(0);
+
+    outer->addLayout(row, 0);
 
     setStyleSheet(QStringLiteral(
-        "QLabel#barStatus{color:#B9C0D0;}"
+        "QLabel#barStatus{color:#C6CDDB;}"
         "QLabel#barCount{color:#98A1B4;}"
         "QLabel#barHint{color:#7F889C;}"
-        "QToolButton{border:none;border-radius:6px;color:#C7CEDC;}"
-        "QToolButton:hover{background:rgba(255,255,255,28);}"
-        "QToolButton:pressed{background:rgba(255,255,255,52);}"
+        "QToolButton{border:none;border-radius:8px;color:#CBD3E1;padding:2px;}"
+        "QToolButton:hover{background:rgba(255,255,255,38);color:#F2F5FA;}"
+        "QToolButton:pressed{background:rgba(255,255,255,64);}"
         "QToolButton#barMore{color:#9CC1FF;border:1px solid rgba(122,162,247,90);"
-        "border-radius:11px;padding:0 8px;}"
+        "border-radius:11px;padding:0 10px;}"
         "QToolButton#barMore:hover{background:rgba(122,162,247,50);color:#EAF1FF;}"));
 
     connect(m_pauseBtn, &QToolButton::clicked, this, &OverlayBar::pauseToggled);
+    connect(m_scopeBtn, &QToolButton::clicked, this, [this] {
+        // Cycle: 0 (fullscreen) → 1 (active window) → 2 (cursor region) → 3 (custom) → 0
+        const int nextMode = (m_cfg.captureMode + 1) % 4;
+        emit captureModeToggled();
+        setCaptureMode(nextMode);
+    });
+    connect(m_adjustBtn, &QToolButton::clicked, this, &OverlayBar::regionSelectRequested);
     connect(m_listBtn, &QToolButton::clicked, this, &OverlayBar::detailsRequested);
     connect(m_settingsBtn, &QToolButton::clicked, this, &OverlayBar::settingsRequested);
     connect(m_hideBtn, &QToolButton::clicked, this, &OverlayBar::hideRequested);
@@ -224,6 +255,29 @@ OverlayBar::OverlayBar(QWidget* parent)
     connect(m_flashTimer, &QTimer::timeout, this, [this] {
         m_flashText.clear();
         setStatus(m_statusText, m_statusKind);
+    });
+
+    // Auto "marquee": while there are more words than fit on screen, slowly
+    // scroll the chip strip back and forth. Pauses when the pointer is over the
+    // bar so the user can read/hover/click a word without it sliding away.
+    m_marqueeTimer = new QTimer(this);
+    m_marqueeTimer->setInterval(30);
+    connect(m_marqueeTimer, &QTimer::timeout, this, [this] {
+        if (!m_scroll || !m_scroll->isVisible())
+            return;
+        QScrollBar* bar = m_scroll->horizontalScrollBar();
+        const int max = bar->maximum();
+        const int min = bar->minimum();
+        if (max <= min) {
+            m_marqueeTimer->stop();
+            return;
+        }
+        const int next = bar->value() + m_marqueeDir;
+        if (next >= max)
+            m_marqueeDir = -1;
+        else if (next <= min)
+            m_marqueeDir = 1;
+        bar->setValue(qBound(min, next, max));
     });
 
     m_scroll->viewport()->installEventFilter(this);
@@ -260,11 +314,23 @@ void OverlayBar::applyConfig(const AppConfig& cfg)
         chip->setChipFont(wordFont);
 
     const int chipHeight = WordChip::chipHeightFor(wordFont);
-    setFixedHeight(qMax(40, chipHeight + 14));
-    m_scroll->setFixedHeight(chipHeight + 2);
+    // Each chip unit stacks an 11px short-def label under the chip, so the bar
+    // needs two rows' worth of height (chip + 3px gap + label + margins).
+    QFont defFont(QStringLiteral("Microsoft YaHei UI"));
+    defFont.setPixelSize(11);
+    const int defHeight = QFontMetrics(defFont).height();
+    const int unitHeight = chipHeight + 3 + defHeight;
+    // The digital pet is 39 px tall; reserve enough room so it is never clipped
+    // even when the font is small and the chip unit alone would be shorter.
+    const int petHeight = m_pet ? m_pet->sizeHint().height() : 0;
+    const int minBarHeight = qMax(40, petHeight + 18);
+    setFixedHeight(qMax(minBarHeight, unitHeight + 18));
+    m_scroll->setFixedHeight(unitHeight + 2);
 
     updateWidth();
     update();
+
+    setCaptureMode(m_cfg.captureMode);
 
     if (!m_cfg.barPosSet)
         centerOnScreen();
@@ -318,6 +384,27 @@ void OverlayBar::setPaused(bool paused)
     updateDot();
 }
 
+void OverlayBar::setCaptureMode(int mode)
+{
+    // 0 = whole screen, 1 = active window, 2 = cursor region, 3 = custom region
+    static const QString glyphs[] = {
+        QStringLiteral("▢"),   // fullscreen
+        QStringLiteral("⊟"),   // active window
+        QStringLiteral("◎"),   // cursor region
+        QStringLiteral("◇"),   // custom region
+    };
+    static const QString tips[] = {
+        QStringLiteral("识别范围：整个屏幕（点击切换）"),
+        QStringLiteral("识别范围：当前窗口（点击切换）"),
+        QStringLiteral("识别范围：鼠标附近 900×560（点击切换）"),
+        QStringLiteral("识别范围：自定义区域（点击切换 · ⊞ 调整框选）"),
+    };
+    const int idx = qBound(0, mode, 3);
+    m_scopeBtn->setText(glyphs[idx]);
+    m_scopeBtn->setToolTip(tips[idx]);
+    m_adjustBtn->setVisible(idx == 3);
+}
+
 void OverlayBar::setScanning(bool scanning)
 {
     if (m_scanning == scanning)
@@ -363,10 +450,15 @@ void OverlayBar::setWords(const QVector<WordEntry>& words)
         && (pointerIsNearBar() || (m_card && m_card->isVisible())))
         return;
 
-    const int limit = qBound(1, m_cfg.maxChips, 40);
+    // With the auto marquee we no longer truncate to the on-screen chip budget;
+    // show everything (up to a sane cap) and let the strip scroll.
+    const int limit = qBound(1, words.size(), 60);
     const int overflow = qMax(0, words.size() - limit);
     m_moreBtn->setText(QStringLiteral("+%1").arg(overflow));
     m_moreBtn->setVisible(overflow > 0);
+    // When overflow is shown the "+N" button already communicates "N more";
+    // hiding the plain count avoids redundant info and keeps the button group tight.
+    m_count->setVisible(overflow == 0);
     if (overflow > 0) {
         m_moreBtn->setToolTip(QStringLiteral("还有 %1 个待处理生词，点击打开列表").arg(overflow));
     }
@@ -390,6 +482,52 @@ WordChip* OverlayBar::findChip(const QString& word) const
             return chip;
     }
     return nullptr;
+}
+
+QLabel* OverlayBar::buildChipDefLabel(const WordDefinition& def, QWidget* parent)
+{
+    QString text;
+    for (const QString& rawSense : def.senses) {
+        const QString sense = rawSense.trimmed();
+        if (sense.isEmpty() || sense.startsWith(QStringLiteral("原形："))) continue;
+
+        static const QStringList posList = {
+            QStringLiteral("n."), QStringLiteral("v."), QStringLiteral("vt."),
+            QStringLiteral("vi."), QStringLiteral("a."), QStringLiteral("adj."),
+            QStringLiteral("ad."), QStringLiteral("adv."), QStringLiteral("prep."),
+            QStringLiteral("conj."), QStringLiteral("pron."), QStringLiteral("num."),
+            QStringLiteral("art."), QStringLiteral("interj."), QStringLiteral("int."),
+            QStringLiteral("aux."), QStringLiteral("pref."), QStringLiteral("suf."),
+            QStringLiteral("pl."), QStringLiteral("ph."), QStringLiteral("abbr."),
+        };
+        QString gloss = sense;
+        for (const QString& pos : posList) {
+            if (gloss.startsWith(pos, Qt::CaseInsensitive)) {
+                gloss = gloss.mid(pos.size()).trimmed();
+                break;
+            }
+        }
+        if (gloss.startsWith(QLatin1Char('['))) {
+            const int close = gloss.indexOf(QLatin1Char(']'));
+            if (close > 0) gloss = gloss.mid(close + 1).trimmed();
+        }
+        if (gloss.length() > 10) gloss = gloss.left(10) + QStringLiteral("…");
+        if (!gloss.isEmpty()) { text = gloss; break; }
+    }
+    if (text.isEmpty())
+        return nullptr;
+
+    auto* label = new QLabel(text, parent);
+    // Left-align both the word and its gloss so every chip starts on the same
+    // vertical edge — a clean, columnar look instead of each word floating over
+    // its own off-center definition.
+    label->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+    QFont defFont(QStringLiteral("Microsoft YaHei UI"));
+    defFont.setPixelSize(11);
+    label->setFont(defFont);
+    label->setStyleSheet(QStringLiteral("color:#98A1B4;background:transparent;"));
+    label->adjustSize();
+    return label;
 }
 
 void OverlayBar::syncChips(const QVector<WordEntry>& words)
@@ -421,35 +559,54 @@ void OverlayBar::syncChips(const QVector<WordEntry>& words)
         return;
     }
 
-    const int limit = qBound(1, m_cfg.maxChips, 40);
+    // Cap matches setWords()'s marquee budget so the strip scrolls instead of
+    // truncating into a "+N" button.
+    const int limit = qBound(1, words.size(), 60);
     QVector<WordEntry> wanted = words.mid(0, limit);
 
-    // Drop chips that are no longer shown.
-    for (int i = m_chips.size() - 1; i >= 0; --i) {
-        WordChip* chip = m_chips.at(i);
+    // Collect current chips by word so we can reuse.
+    QHash<QString, WordChip*> byWord;
+    for (WordChip* c : m_chips)
+        byWord.insert(c->word(), c);
+
+    // Remove anything no longer wanted.
+    for (auto it = m_chips.begin(); it != m_chips.end();) {
+        WordChip* chip = *it;
         bool keep = false;
-        for (const WordEntry& entry : wanted) {
-            if (entry.word == chip->word()) {
-                keep = true;
-                break;
-            }
-        }
+        for (const WordEntry& entry : wanted)
+            if (entry.word == chip->word()) { keep = true; break; }
         if (!keep) {
-            m_chips.removeAt(i);
-            m_chipLayout->removeWidget(chip);
+            QWidget* unit = m_chipUnits.take(chip);
+            if (unit) {
+                m_chipLayout->removeWidget(unit);
+                unit->hide();
+                unit->deleteLater();   // chip is a child of unit, deleted with it
+            }
             if (m_card && m_card->isVisible() && m_cardWord == chip->word())
                 hideWordCardNow();
-            chip->hide();
-            chip->deleteLater();
+            it = m_chips.erase(it);
+        } else {
+            ++it;
         }
     }
 
+    m_chips.clear();
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
     for (int index = 0; index < wanted.size(); ++index) {
         const WordEntry& entry = wanted.at(index);
-        WordChip* chip = findChip(entry.word);
+        WordChip* chip = byWord.value(entry.word);
+        QWidget* unit = m_chipUnits.value(chip);
         if (!chip) {
-            chip = new WordChip(entry.word, m_chipHost);
+            // New word → a fresh vertical unit: chip on top, short-def label
+            // directly below it. Units pack horizontally with 4px spacing, so
+            // words stay tight while each meaning sits under its own word.
+            unit = new QWidget(m_chipHost);
+            unit->setAutoFillBackground(false);
+            auto* unitLayout = new QVBoxLayout(unit);
+            unitLayout->setContentsMargins(0, 0, 0, 0);
+            unitLayout->setSpacing(3);
+
+            chip = new WordChip(entry.word, unit);
             QFont wordFont(QStringLiteral("Segoe UI"));
             wordFont.setPixelSize(qBound(10, m_cfg.fontSize, 26));
             chip->setChipFont(wordFont);
@@ -457,28 +614,38 @@ void OverlayBar::syncChips(const QVector<WordEntry>& words)
                 emit copyRequested(word);
             });
             connect(chip, &WordChip::knownBySwipe, this, [this, chip](const QString& word) {
-                // Hide immediately, before the session refresh catches up. This also
-                // prevents the definition card from lingering after the gesture.
                 hideWordCardNow();
+                if (m_pet)
+                    m_pet->eat(word);
                 chip->hide();
                 emit markKnownRequested(word);
             });
             connect(chip, &WordChip::menuRequested, this, &OverlayBar::showWordMenu);
             connect(chip, &WordChip::hoverStarted, this, &OverlayBar::showWordCard);
             connect(chip, &WordChip::hoverEnded, this, &OverlayBar::hideWordCard);
-            m_chips.append(chip);
-            m_chipLayout->insertWidget(index, chip);
+
+            unitLayout->addWidget(chip, 0, Qt::AlignLeft);
+            m_chipLayout->addWidget(unit, 0, Qt::AlignTop);
+            m_chipUnits.insert(chip, unit);
         }
+
         chip->setCount(entry.count);
         chip->setFresh(now - entry.firstSeen < 4000);
 
-        const int current = m_chips.indexOf(chip);
-        if (current != index) {
-            m_chips.removeAt(current);
-            m_chips.insert(index, chip);
-            m_chipLayout->insertWidget(index, chip);
+        // Build the short-def label once (the definition never changes for a
+        // given word during the session). Reused units already have theirs.
+        if (unit && !unit->findChild<QLabel*>(QString(), Qt::FindDirectChildrenOnly)
+            && m_dictionary && m_dictionary->isLoaded()) {
+            const WordDefinition def = m_dictionary->lookup(entry.word);
+            if (def.isValid()) {
+                QLabel* defLabel = buildChipDefLabel(def, unit);
+                if (defLabel)
+                    unit->layout()->addWidget(defLabel);
+            }
         }
+
         chip->show();
+        m_chips.append(chip);
     }
 }
 
@@ -495,10 +662,14 @@ void OverlayBar::updateWidth()
     }
 
     int chipsWidth = 0;
-    for (WordChip* chip : m_chips)
-        chipsWidth += chip->sizeHint().width() + 6;
+    const int spacing = m_chipLayout->spacing();
+    for (WordChip* chip : m_chips) {
+        QWidget* unit = m_chipUnits.value(chip);
+        chipsWidth += unit ? unit->sizeHint().width() : chip->sizeHint().width();
+        chipsWidth += spacing;
+    }
     if (chipsWidth > 0)
-        chipsWidth -= 6;
+        chipsWidth -= spacing;
 
     if (m_chips.isEmpty()) {
         hideWordCardNow();
@@ -513,6 +684,9 @@ void OverlayBar::updateWidth()
     }
 
     adjustSize();
+
+    // Start/stop the auto marquee now that the strip width is final.
+    updateMarquee();
 
     // Keep the bar centred while its width changes; it is only resized when the
     // pointer is away, so this cannot yank the bar from under the cursor.
@@ -595,70 +769,62 @@ void OverlayBar::showWordMenu(const QString& word, const QPoint& globalPos)
 
 void OverlayBar::showWordCard(WordChip* chip)
 {
-    if (m_cardHideTimer)
-        m_cardHideTimer->stop();
-
+    // Hover chip → show the detailed floating DefinitionCard (full senses,
+    // phonetic, origin tags, action buttons). The short gloss is always
+    // visible under each chip in row 1 — this is the detailed view.
+    if (m_cardHideTimer) m_cardHideTimer->stop();
     if (!chip || !isVisible() || !m_dictionary || !m_dictionary->isLoaded())
         return;
 
     const WordDefinition definition = m_dictionary->lookup(chip->word());
-    if (!definition.isValid()) {
-        hideWordCardNow();
-        return;
-    }
+    if (!definition.isValid()) return;
+
+    emit wordInspected(chip->word());
+    m_cardWord = chip->word();
 
     if (!m_card) {
         m_card = new DefinitionCard;
-        connect(m_card, &DefinitionCard::markKnownRequested, this, [this](const QString& word) {
-            hideWordCardNow();
-            emit markKnownRequested(word);
+        connect(m_card, &DefinitionCard::markKnownRequested, this, [this](const QString& w) {
+            hideWordCardNow(); emit markKnownRequested(w);
         });
-        connect(m_card, &DefinitionCard::blockRequested, this, [this](const QString& word) {
-            hideWordCardNow();
-            emit blockRequested(word);
+        connect(m_card, &DefinitionCard::blockRequested, this, [this](const QString& w) {
+            hideWordCardNow(); emit blockRequested(w);
         });
-        connect(m_card, &DefinitionCard::copyRequested, this, [this](const QString& word) {
-            hideWordCardNow();
-            emit copyRequested(word);
+        connect(m_card, &DefinitionCard::copyRequested, this, [this](const QString& w) {
+            hideWordCardNow(); emit copyRequested(w);
         });
         connect(m_card, &DefinitionCard::hoverChanged, this, [this](bool inside) {
             if (inside) {
-                if (m_cardHideTimer)
-                    m_cardHideTimer->stop();
+                if (m_cardHideTimer) m_cardHideTimer->stop();
             } else {
                 hideWordCard();
             }
         });
     }
 
-    m_cardWord = chip->word();
-    emit wordInspected(m_cardWord);
-
     const QRect anchor(chip->mapToGlobal(QPoint(0, 0)), chip->size());
     m_card->showFor(definition, anchor);
+    m_card->raise();
 }
 
 void OverlayBar::hideWordCard(WordChip* chip)
 {
     Q_UNUSED(chip);
-    if (!m_card || !m_card->isVisible())
-        return;
-    // A short grace period lets the pointer travel from the chip to the card
-    // (and onto one of the buttons) without the card disappearing.
-    if (m_cardHideTimer)
-        m_cardHideTimer->start();
+    if (!m_card || !m_card->isVisible()) return;
+    if (!m_cardHideTimer) {
+        m_cardHideTimer = new QTimer(this);
+        m_cardHideTimer->setSingleShot(true);
+    }
+    m_cardHideTimer->start(200);  // grace period to reach card buttons
 }
 
 void OverlayBar::hideWordCardNow()
 {
-    if (m_cardHideTimer)
-        m_cardHideTimer->stop();
-    const bool wasOpen = m_card && m_card->isVisible();
-    if (wasOpen)
+    if (m_cardHideTimer) m_cardHideTimer->stop();
+    if (m_card && m_card->isVisible()) {
         m_card->hide();
-    m_cardWord.clear();
-    if (wasOpen)
-        refreshLayout();
+        m_cardWord.clear();
+    }
 }
 
 void OverlayBar::paintEvent(QPaintEvent*)
@@ -667,12 +833,23 @@ void OverlayBar::paintEvent(QPaintEvent*)
     p.setRenderHint(QPainter::Antialiasing, true);
 
     const QRectF rectF = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
-    QColor background(20, 22, 28);
-    background.setAlpha(qBound(120, int(255 * m_cfg.opacityPercent / 100.0), 255));
+    const int alpha = qBound(60, int(255 * m_cfg.opacityPercent / 100.0), 255);
+
+    // Soft vertical gradient (slightly lighter at the top) instead of a flat fill.
+    QLinearGradient gradient(rectF.topLeft(), rectF.bottomLeft());
+    QColor top(30, 33, 42, alpha);
+    QColor bottom(16, 18, 24, alpha);
+    gradient.setColorAt(0.0, top);
+    gradient.setColorAt(1.0, bottom);
 
     p.setPen(QPen(QColor(255, 255, 255, 30), 1));
-    p.setBrush(background);
+    p.setBrush(gradient);
     p.drawRoundedRect(rectF, 14, 14);
+
+    // Subtle top highlight line for a slightly "lifted" edge.
+    p.setPen(QPen(QColor(255, 255, 255, 18), 1));
+    p.drawLine(QPointF(rectF.left() + 14, rectF.top() + 1),
+               QPointF(rectF.right() - 14, rectF.top() + 1));
 }
 
 void OverlayBar::mousePressEvent(QMouseEvent* event)
@@ -737,6 +914,7 @@ void OverlayBar::hideEvent(QHideEvent* event)
 void OverlayBar::enterEvent(QEnterEvent* event)
 {
     m_autoHideTimer->stop();
+    stopMarquee();
     QWidget::enterEvent(event);
 }
 
@@ -745,6 +923,7 @@ void OverlayBar::leaveEvent(QEvent* event)
     startAutoHideTimer();
     // The layout was frozen while the pointer was here; catch up now.
     refreshLayout();
+    updateMarquee();
     QWidget::leaveEvent(event);
 }
 
@@ -754,6 +933,37 @@ void OverlayBar::startAutoHideTimer()
         return;
     if (m_cfg.autoHide && isVisible())
         m_autoHideTimer->start(qMax(3, m_cfg.autoHideSeconds) * 1000);
+}
+
+void OverlayBar::startMarquee()
+{
+    if (!m_marqueeTimer || !m_scroll || !m_scroll->isVisible())
+        return;
+    if (underMouse() || (m_card && m_card->isVisible()))
+        return;
+    QScrollBar* bar = m_scroll->horizontalScrollBar();
+    if (bar->maximum() > bar->minimum())
+        m_marqueeTimer->start();
+}
+
+void OverlayBar::stopMarquee()
+{
+    if (m_marqueeTimer)
+        m_marqueeTimer->stop();
+}
+
+void OverlayBar::updateMarquee()
+{
+    if (!m_scroll || !m_scroll->isVisible()) {
+        stopMarquee();
+        return;
+    }
+    QScrollBar* bar = m_scroll->horizontalScrollBar();
+    if (bar->maximum() > bar->minimum() && !underMouse()
+        && !(m_card && m_card->isVisible()))
+        startMarquee();
+    else
+        stopMarquee();
 }
 
 bool OverlayBar::eventFilter(QObject* watched, QEvent* event)

@@ -1,5 +1,6 @@
 #include "Dictionary.h"
 
+#include <QHash>
 #include <QSet>
 #include <QtEndian>
 
@@ -285,6 +286,81 @@ WordDefinition Dictionary::lookup(const QString& word) const
             return def;
         }
     }
+    return {};
+}
+
+WordDefinition Dictionary::lookupRepaired(const QString& word, QString* outWord) const
+{
+    // 1) Try raw lookup first — common case, zero extra cost.
+    WordDefinition def = lookup(word);
+    if (def.isValid()) {
+        if (outWord) *outWord = word;
+        return def;
+    }
+
+    const QString key = normalize(word);
+    if (key.isEmpty())
+        return {};
+
+    // 2) Single-character OCR-confusable repair. Tesseract often confuses:
+    //    0↔o, 1↔l/I, 2↔z, 5↔s, 6↔g, 8↔b.
+    //    We ONLY replace DIGIT→LETTER because the reverse never produces valid
+    //    English words; trying each single position keeps this OCR-repair pass
+    //    to at most (6-digit-variants × len) dictionary lookups — still microseconds.
+    static const QHash<QChar, QString> repairs = {
+        {QLatin1Char('0'), QStringLiteral("oO")},
+        {QLatin1Char('1'), QStringLiteral("lI")},
+        {QLatin1Char('2'), QStringLiteral("zZ")},
+        {QLatin1Char('5'), QStringLiteral("sS")},
+        {QLatin1Char('6'), QStringLiteral("gG")},
+        {QLatin1Char('8'), QStringLiteral("bB")},
+    };
+
+    for (int i = 0; i < key.size(); ++i) {
+        const QChar c = key.at(i);
+        auto it = repairs.find(c);
+        if (it == repairs.end()) continue;
+
+        QString candidate = key;
+        for (const QChar& replacement : it.value()) {
+            candidate[i] = replacement;
+            // lookup() already tries exact + base forms.
+            def = lookup(candidate);
+            if (def.isValid()) {
+                // Report the dictionary spelling back so the filter/session
+                // store the repaired word instead of the garbled OCR output.
+                def.word = def.word.toLower();  // normalize
+                if (outWord) *outWord = candidate;
+                return def;
+            }
+        }
+    }
+
+    // 3) Two-character merges that OCR sometimes produces: 'rn' read as 'm',
+    //    'vv' read as 'w'. Try collapsing each pair.
+    static const QPair<QString, QString> merges[] = {
+        {QStringLiteral("rn"), QStringLiteral("m")},
+        {QStringLiteral("vv"), QStringLiteral("w")},
+        {QStringLiteral("ii"), QStringLiteral("u")},
+        {QStringLiteral("cl"), QStringLiteral("d")},
+    };
+    for (const auto& pair : merges) {
+        const QString& from = pair.first;
+        const QString& to = pair.second;
+        int idx = 0;
+        while ((idx = key.indexOf(from, idx)) >= 0) {
+            QString candidate = key;
+            candidate.replace(idx, from.size(), to);
+            def = lookup(candidate);
+            if (def.isValid()) {
+                def.word = def.word.toLower();
+                if (outWord) *outWord = candidate;
+                return def;
+            }
+            ++idx;
+        }
+    }
+
     return {};
 }
 

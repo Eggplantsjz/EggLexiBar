@@ -216,3 +216,12 @@ bool WordFilter::isInteresting(const QString& word) const
         return true;
     return !inCommon(word);
 }
+
+int WordFilter::difficultyRank(const QString& word) const
+{
+    const int idx = m_commonOrdered.indexOf(word);
+    if (idx >= 0)
+        return idx;
+    // Not in the frequent list → rarer than everything in it.
+    return m_commonOrdered.size();
+}

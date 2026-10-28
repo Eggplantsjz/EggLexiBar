@@ -26,6 +26,11 @@ public:
     /// Shows whether the global show/hide hotkey could be registered.
     void setHotkeyInfo(bool available);
 
+signals:
+    /// Emitted whenever a visual-setting widget (font size, opacity, chip count)
+    /// changes so the overlay bar can update its appearance live without OK.
+    void previewRequested(const AppConfig& cfg);
+
 private:
     void buildUi();
     void browseForExecutable();

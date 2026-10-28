@@ -2,9 +2,14 @@
 
 #include "Settings.h"
 #include "WordSession.h"
+#include "Dictionary.h"
 
+#include <QHash>
+#include <QHBoxLayout>
+#include <QLabel>
 #include <QPoint>
 #include <QVector>
+#include <QVBoxLayout>
 #include <QWidget>
 
 class QLabel;
@@ -16,6 +21,7 @@ class StatusDot;
 class WordChip;
 class Dictionary;
 class DefinitionCard;
+class PetWidget;
 
 /// The always-on-top status bar that shows the words found on screen.
 class OverlayBar : public QWidget
@@ -34,12 +40,16 @@ public:
     void setScanning(bool scanning);
     void setEngineReady(bool ready);
     void flashMessage(const QString& text);
+    /// Updates the capture-mode button glyph/tooltip after cfg changes.
+    void setCaptureMode(int mode);
 
 signals:
     void pauseToggled();
     void detailsRequested();
     void settingsRequested();
     void hideRequested();
+    void captureModeToggled();
+    void regionSelectRequested();
     void copyRequested(const QString& word);
     void markKnownRequested(const QString& word);
     void blockRequested(const QString& word);
@@ -60,6 +70,7 @@ protected:
 
 private:
     WordChip* findChip(const QString& word) const;
+    QLabel* buildChipDefLabel(const WordDefinition& def, QWidget* parent);
     void syncChips(const QVector<WordEntry>& words);
     void updateWidth();
     /// True while the pointer is inside the bar (used to freeze layout changes).
@@ -77,10 +88,14 @@ private:
     /// Re-applies the newest word list after a frozen (pointer-over-bar) layout.
     void refreshLayout();
     void startAutoHideTimer();
+    void updateMarquee();
+    void startMarquee();
+    void stopMarquee();
 
     AppConfig m_cfg;
     StatusDot* m_dot = nullptr;
     QLabel* m_status = nullptr;
+    PetWidget* m_pet = nullptr;
     QLabel* m_count = nullptr;
     QLabel* m_hint = nullptr;
     QScrollArea* m_scroll = nullptr;
@@ -88,13 +103,17 @@ private:
     QHBoxLayout* m_chipLayout = nullptr;
     QToolButton* m_moreBtn = nullptr;
     QToolButton* m_pauseBtn = nullptr;
+    QToolButton* m_scopeBtn = nullptr;   // capture-mode quick toggle
+    QToolButton* m_adjustBtn = nullptr;  // draw custom region (visible only in mode==3)
     QToolButton* m_listBtn = nullptr;
     QToolButton* m_settingsBtn = nullptr;
     QToolButton* m_hideBtn = nullptr;
     QTimer* m_autoHideTimer = nullptr;
     QTimer* m_flashTimer = nullptr;
     QTimer* m_cardHideTimer = nullptr;
+    QTimer* m_marqueeTimer = nullptr;
     QVector<WordChip*> m_chips;
+    QHash<WordChip*, QWidget*> m_chipUnits;   // chip → its VBox unit (chip + def label)
     const Dictionary* m_dictionary = nullptr;
     DefinitionCard* m_card = nullptr;
     QString m_cardWord;
@@ -110,6 +129,7 @@ private:
     bool m_userMoved = false;
     bool m_dragging = false;
     bool m_dragMoved = false;
+    int m_marqueeDir = 1;
     QPoint m_pressGlobal;
     QPoint m_dragOffset;
 };

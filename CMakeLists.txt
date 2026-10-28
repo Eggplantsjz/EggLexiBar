@@ -44,6 +44,8 @@ set(GUI_SOURCES
     src/DetailsPanel.cpp
     src/SettingsDialog.cpp
     src/HotkeyFilter.cpp
+    src/PetWidget.cpp
+    src/RegionSelector.cpp
 )
 
 qt_add_executable(WordLens WIN32 ${GUI_SOURCES})

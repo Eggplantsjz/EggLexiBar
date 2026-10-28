@@ -34,4 +34,8 @@ private:
     QLabel* m_text = nullptr;
     QWidget* m_actions = nullptr;
     QString m_word;
+    /// True when the card sits above the anchor → the triangle points down.
+    bool m_anchorBelow = true;
+    /// X-position of the triangle pointer relative to the card's left edge.
+    int m_pointerX = 0;
 };

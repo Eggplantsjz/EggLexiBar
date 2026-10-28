@@ -2,6 +2,7 @@
 
 #include <QContextMenuEvent>
 #include <QFontMetrics>
+#include <QLinearGradient>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QTimer>
@@ -40,6 +41,16 @@ void WordChip::setFresh(bool fresh)
     update();
 }
 
+void WordChip::markCopied()
+{
+    m_copied = true;
+    update();
+    QTimer::singleShot(380, this, [this] {
+        m_copied = false;
+        update();
+    });
+}
+
 void WordChip::setChipFont(const QFont& font)
 {
     m_font = font;
@@ -75,6 +86,9 @@ void WordChip::paintEvent(QPaintEvent*)
     if (m_swiping) {
         background = QColor(74, 222, 128, 92);
         border = QColor(134, 239, 172, 210);
+    } else if (m_copied) {
+        background = QColor(74, 222, 128, 70);
+        border = QColor(134, 239, 172, 180);
     } else if (m_fresh) {
         background = QColor(122, 162, 247, m_hover ? 88 : 64);
         border = QColor(122, 162, 247, 190);
@@ -86,8 +100,23 @@ void WordChip::paintEvent(QPaintEvent*)
         border = QColor(255, 255, 255, 26);
     }
 
+    QBrush brush;
+    if (m_swiping || m_copied || m_fresh) {
+        // Momentary states stay flat for a crisp, unambiguous signal.
+        brush = background;
+    } else {
+        // Idle + hover get a subtle top-lit gradient for a softer, less "flat"
+        // pill look.
+        QLinearGradient g(rect().topLeft(), rect().bottomLeft());
+        QColor lighter = background;
+        lighter.setAlpha(qMin(255, background.alpha() + 24));
+        g.setColorAt(0.0, lighter);
+        g.setColorAt(1.0, background);
+        brush = QBrush(g);
+    }
+
     p.setPen(QPen(border, 1));
-    p.setBrush(background);
+    p.setBrush(brush);
     p.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), radius, radius);
 
     p.setFont(m_font);
@@ -173,10 +202,14 @@ void WordChip::mouseReleaseEvent(QMouseEvent* event)
         m_swiping = false;
         releaseMouse();
         update();
-        if (markKnown)
+        if (markKnown) {
             emit knownBySwipe(m_word);
-        else if (rect().contains(event->position().toPoint()))
+        } else if (rect().contains(event->position().toPoint())) {
+            // Give the chip itself a brief "copied" flash so the user can confirm
+            // it was this word (not an adjacent one) that entered the clipboard.
+            markCopied();
             emit activated(m_word);
+        }
         event->accept();
         return;
     }

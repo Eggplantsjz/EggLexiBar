@@ -36,6 +36,10 @@ public:
     bool isInDictionary(const QString& word) const { return inDictionary(word); }
     bool isCommon(const QString& word) const { return inCommon(word); }
 
+    /// Difficulty rank for @p word: 0 = most common (easiest), larger = rarer
+    /// (harder). Words absent from the frequency list rank highest of all.
+    int difficultyRank(const QString& word) const;
+
     QStringList knownWords() const { return m_config.knownWords; }
     QStringList blockedWords() const { return m_config.blockedWords; }
 

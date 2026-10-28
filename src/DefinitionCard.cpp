@@ -5,6 +5,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPainter>
+#include <QPolygonF>
 #include <QPushButton>
 #include <QScreen>
 #include <QVBoxLayout>
@@ -153,8 +154,16 @@ void DefinitionCard::showFor(const WordDefinition& definition, const QRect& anch
 
     int x = anchor.center().x() - width() / 2;
     int y = anchor.top() - height() - 8;
-    if (y < available.top() + 4)
+    if (y < available.top() + 4) {
         y = anchor.bottom() + 8;
+        m_anchorBelow = false;  // card sits BELOW anchor → triangle points UP
+    } else {
+        m_anchorBelow = true;   // card sits ABOVE anchor → triangle points DOWN
+    }
+
+    m_pointerX = anchor.center().x() - x;
+    // Clamp pointer so it never draws off the card's rounded side
+    m_pointerX = qBound(10, m_pointerX, width() - 10);
 
     x = qBound(available.left() + 6, x, qMax(available.left() + 6, available.right() - width() - 6));
     y = qBound(available.top() + 4, y, qMax(available.top() + 4, available.bottom() - height() - 4));
@@ -170,8 +179,32 @@ void DefinitionCard::paintEvent(QPaintEvent*)
     painter.setRenderHint(QPainter::Antialiasing, true);
 
     const QRectF body = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
-    painter.setPen(QPen(QColor(255, 255, 255, 34), 1));
-    painter.setBrush(QColor(22, 25, 32, 246));
+
+    // Draw the triangle pointer first (behind the body fill is fine —
+    // we paint the rounded body over it on the opposite side, leaving only
+    // the triangle on the visible anchor-facing edge).
+    constexpr int kTriangleHalf = 7;      // half-width of the pointer base
+    constexpr int kTriangleHeight = 8;    // height of the pointer
+    const QColor bg(22, 25, 32, 246);
+    const QColor borderColor(255, 255, 255, 34);
+
+    QPointF tip(m_pointerX, m_anchorBelow ? height() : 0);
+    QPointF left(m_pointerX - kTriangleHalf, m_anchorBelow ? height() - kTriangleHeight : kTriangleHeight);
+    QPointF right(m_pointerX + kTriangleHalf, m_anchorBelow ? height() - kTriangleHeight : kTriangleHeight);
+    QPolygonF triangle;
+    triangle << left << tip << right;
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(bg);
+    painter.drawPolygon(triangle);
+    // Outline on the triangle's two exposed edges
+    painter.setPen(QPen(borderColor, 1));
+    painter.setBrush(Qt::NoBrush);
+    painter.drawLine(left, tip);
+    painter.drawLine(right, tip);
+
+    // Now paint the rounded card body (same fill as the triangle).
+    painter.setPen(QPen(borderColor, 1));
+    painter.setBrush(bg);
     painter.drawRoundedRect(body, 12, 12);
 }
 

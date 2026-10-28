@@ -51,6 +51,12 @@ public:
     /// Looks up \a word, falling back to simple base forms (plural, -ing, -ed, ...).
     WordDefinition lookup(const QString& word) const;
 
+    /// Like lookup() but also tries common OCR-character confusables
+    /// (e.g. '1'→'l', '0'→'o', '5'→'s') when the raw word has no match.
+    /// Returns the first valid definition found, and writes the repaired
+    /// spelling back to @p outWord if it differs from @p word.
+    WordDefinition lookupRepaired(const QString& word, QString* outWord = nullptr) const;
+
     /// Looks up the exact spelling only.
     WordDefinition lookupExact(const QString& word) const;
 

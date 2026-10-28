@@ -19,6 +19,8 @@ public:
     void setCount(int count);
     void setFresh(bool fresh);
     void setChipFont(const QFont& font);
+    /// Brief visual feedback that this chip's word was copied successfully.
+    void markCopied();
 
     static int chipHeightFor(const QFont& font);
 
@@ -49,6 +51,7 @@ private:
     bool m_pressed = false;
     bool m_swiping = false;
     bool m_fresh = false;
+    bool m_copied = false;
     QPoint m_pressPos;
     QFont m_font;
     int m_padX = 10;

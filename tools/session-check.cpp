@@ -56,20 +56,20 @@ void testAutoSnoozeRetiresRepeatedWords()
 
     session.ingest(hits({QStringLiteral("boundary")}), t0);
     session.ingest(hits({QStringLiteral("boundary")}), t0 + 5000);
-    check(session.autoSnooze(t0 + 6000, 3, 20000) == 0,
+    check(session.autoFilter(t0 + 6000, 3, 20000) == 0,
           QStringLiteral("two scans are not enough"));
     check(!session.active(t0 + 6000, 0).isEmpty(),
           QStringLiteral("word still visible after two scans"));
 
     session.ingest(hits({QStringLiteral("boundary")}), t0 + 10000);
-    check(session.autoSnooze(t0 + 15000, 3, 20000) == 0,
+    check(session.autoFilter(t0 + 15000, 3, 20000) == 0,
           QStringLiteral("age threshold is respected"));
-    check(session.autoSnooze(t0 + 21000, 3, 20000) == 1,
+    check(session.autoFilter(t0 + 21000, 3, 20000) == 1,
           QStringLiteral("third scan + 20s retires the word"));
     check(session.active(t0 + 21000, 0).isEmpty(),
           QStringLiteral("retired word leaves the bar"));
     check(session.all().size() == 1, QStringLiteral("retired word stays in the list"));
-    check(session.snoozedCount() == 1, QStringLiteral("snoozed count is reported"));
+    check(session.filteredCount() == 1, QStringLiteral("snoozed count is reported"));
 }
 
 /// Hovering or clicking a word protects it from auto-snooze forever.
@@ -84,7 +84,7 @@ void testInteractionProtectsWord()
     for (int i = 1; i <= 10; ++i)
         session.ingest(hits({QStringLiteral("conformal")}), t0 + i * 1000);
 
-    check(session.autoSnooze(t0 + 60000, 3, 20000) == 0,
+    check(session.autoFilter(t0 + 60000, 3, 20000) == 0,
           QStringLiteral("inspected word is never retired"));
     check(wordsOf(session.active(t0 + 60000, 0)) == QStringList{QStringLiteral("conformal")},
           QStringLiteral("inspected word stays in the bar"));
@@ -115,14 +115,14 @@ void testRestoreSnoozedWord()
     session.ingest(hits({QStringLiteral("mapper")}), t0);
     session.ingest(hits({QStringLiteral("mapper")}), t0 + 1000);
     session.ingest(hits({QStringLiteral("mapper")}), t0 + 2000);
-    check(session.autoSnooze(t0 + 30000, 3, 20000) == 1, QStringLiteral("word got snoozed"));
+    check(session.autoFilter(t0 + 30000, 3, 20000) == 1, QStringLiteral("word got snoozed"));
 
-    check(session.setSnoozed(QStringLiteral("mapper"), false), QStringLiteral("restore succeeds"));
-    check(session.snoozedCount() == 0, QStringLiteral("snoozed count drops to zero"));
+    check(session.restoreWord(QStringLiteral("mapper")), QStringLiteral("restore succeeds"));
+    check(session.filteredCount() == 0, QStringLiteral("snoozed count drops to zero"));
 
     // The app marks restored words as inspected, so they must not bounce back.
     session.touchInteraction(QStringLiteral("mapper"));
-    check(session.autoSnooze(t0 + 90000, 3, 20000) == 0,
+    check(session.autoFilter(t0 + 90000, 3, 20000) == 0,
           QStringLiteral("restored word is not snoozed again"));
     check(wordsOf(session.active(t0 + 90000, 0)) == QStringList{QStringLiteral("mapper")},
           QStringLiteral("restored word is back on the bar"));

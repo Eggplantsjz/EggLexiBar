@@ -11,6 +11,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QVBoxLayout>
@@ -26,11 +27,29 @@ void SettingsDialog::buildUi()
     setWindowTitle(QStringLiteral("WordLens · 设置"));
     setWindowFlag(Qt::WindowContextHelpButtonHint, false);
     setModal(true);
-    resize(560, 780);
+    resize(560, 680);
 
     auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(16, 16, 16, 12);
-    root->setSpacing(12);
+    root->setContentsMargins(0, 0, 0, 0);
+    root->setSpacing(0);
+
+    // Scrollable content area — small laptops get a scrollbar rather than
+    // a clipped Settings window. The button box stays pinned below.
+    auto* scrollArea = new QScrollArea(this);
+    scrollArea->setWidgetResizable(true);
+    scrollArea->setFrameShape(QFrame::NoFrame);
+    scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    scrollArea->setStyleSheet(QStringLiteral(
+        "QScrollArea{background:transparent;border:none;}"
+        "QScrollBar:vertical{width:8px;background:transparent;}"
+        "QScrollBar::handle:vertical{background:rgba(120,120,130,160);border-radius:4px;min-height:20px;}"
+        "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0;}"));
+    auto* contentHost = new QWidget;
+    auto* content = new QVBoxLayout(contentHost);
+    content->setContentsMargins(16, 16, 16, 8);
+    content->setSpacing(12);
+    scrollArea->setWidget(contentHost);
+    root->addWidget(scrollArea, 1);
 
     // --- OCR ---------------------------------------------------------------
     auto* ocrGroup = new QGroupBox(QStringLiteral("识别"), this);
@@ -89,7 +108,7 @@ void SettingsDialog::buildUi()
     m_engineState->setStyleSheet(QStringLiteral("color:#98A1B4;"));
     ocrForm->addRow(QString(), m_engineState);
 
-    root->addWidget(ocrGroup);
+    content->addWidget(ocrGroup);
 
     // --- filtering ---------------------------------------------------------
     auto* filterGroup = new QGroupBox(QStringLiteral("生词过滤"), this);
@@ -110,8 +129,8 @@ void SettingsDialog::buildUi()
     m_strictDictionary = new QCheckBox(QStringLiteral("严格词典校验（过滤 OCR 噪声）"), filterGroup);
     filterForm->addRow(QString(), m_strictDictionary);
 
-    m_autoSnooze = new QCheckBox(QStringLiteral("自动收起反复出现、你从未看过的词"), filterGroup);
-    m_autoSnooze->setToolTip(QStringLiteral("被收起的词会标记为“疑似已掌握”，可在生词列表里恢复"));
+    m_autoSnooze = new QCheckBox(QStringLiteral("自动过滤反复出现、你从未看过的词"), filterGroup);
+    m_autoSnooze->setToolTip(QStringLiteral("被过滤的词不算“已掌握”，会按记忆曲线隔一段时间重新出现；只有上划/下滑（或右键/列表标记）才算掌握"));
     filterForm->addRow(QString(), m_autoSnooze);
 
     auto* snoozeRow = new QWidget(filterGroup);
@@ -126,7 +145,7 @@ void SettingsDialog::buildUi()
     snoozeLayout->addWidget(new QLabel(QStringLiteral("且停留"), snoozeRow));
     m_autoSnoozeSeconds = new QSpinBox(snoozeRow);
     m_autoSnoozeSeconds->setRange(5, 600);
-    m_autoSnoozeSeconds->setSuffix(QStringLiteral(" 秒后收起"));
+    m_autoSnoozeSeconds->setSuffix(QStringLiteral(" 秒后过滤"));
     snoozeLayout->addWidget(m_autoSnoozeSeconds);
     snoozeLayout->addStretch(1);
     filterForm->addRow(QString(), snoozeRow);
@@ -138,7 +157,7 @@ void SettingsDialog::buildUi()
     dictNote->setStyleSheet(QStringLiteral("color:#8A93A6;font-size:11px;"));
     filterForm->addRow(QString(), dictNote);
 
-    root->addWidget(filterGroup);
+    content->addWidget(filterGroup);
 
     // --- appearance --------------------------------------------------------
     auto* uiGroup = new QGroupBox(QStringLiteral("显示"), this);
@@ -183,15 +202,15 @@ void SettingsDialog::buildUi()
     autoHideLayout->addStretch(1);
     uiForm->addRow(QString(), autoHideRow);
 
-    root->addWidget(uiGroup);
+    content->addWidget(uiGroup);
 
-    m_hotkeyHint = new QLabel(this);
+    m_hotkeyHint = new QLabel(contentHost);
     m_hotkeyHint->setWordWrap(true);
     m_hotkeyHint->setStyleSheet(QStringLiteral("color:#98A1B4;"));
     m_hotkeyHint->setText(
         QStringLiteral("全局快捷键 Ctrl+Alt+W 显示/隐藏状态栏。拖动状态栏可调整位置。"));
-    root->addWidget(m_hotkeyHint);
-    root->addStretch(1);
+    content->addWidget(m_hotkeyHint);
+    content->addStretch(1);
 
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
     auto* reset = buttons->addButton(QStringLiteral("恢复默认"), QDialogButtonBox::ResetRole);
@@ -210,6 +229,14 @@ void SettingsDialog::buildUi()
     });
 
     applyToWidgets(m_base);
+
+    // Live preview for visual settings — any change in these three immediately
+    // repaints the overlay bar so the user sees the effect without clicking OK.
+    auto emitPreview = [this] { emit previewRequested(config()); };
+    connect(m_fontSize, QOverload<int>::of(&QSpinBox::valueChanged), this, emitPreview);
+    connect(m_opacity, QOverload<int>::of(&QSpinBox::valueChanged), this, emitPreview);
+    connect(m_maxChips, QOverload<int>::of(&QSpinBox::valueChanged), this, emitPreview);
+    connect(m_keepUntilHandled, &QCheckBox::toggled, this, emitPreview);
 }
 
 void SettingsDialog::setConfig(const AppConfig& cfg)
@@ -248,11 +275,11 @@ void SettingsDialog::applyToWidgets(const AppConfig& cfg)
         countIndex = 2;
     m_commonCount->setCurrentIndex(countIndex);
     m_strictDictionary->setChecked(cfg.strictDictionary);
-    m_autoSnooze->setChecked(cfg.autoSnooze);
-    m_autoSnoozeScans->setValue(cfg.autoSnoozeScans);
-    m_autoSnoozeSeconds->setValue(cfg.autoSnoozeSeconds);
-    m_autoSnoozeScans->setEnabled(cfg.autoSnooze);
-    m_autoSnoozeSeconds->setEnabled(cfg.autoSnooze);
+    m_autoSnooze->setChecked(cfg.autoFilter);
+    m_autoSnoozeScans->setValue(cfg.autoFilterScans);
+    m_autoSnoozeSeconds->setValue(cfg.autoFilterSeconds);
+    m_autoSnoozeScans->setEnabled(cfg.autoFilter);
+    m_autoSnoozeSeconds->setEnabled(cfg.autoFilter);
 
     m_maxChips->setValue(cfg.maxChips);
     m_fontSize->setValue(cfg.fontSize);
@@ -279,9 +306,9 @@ AppConfig SettingsDialog::config() const
     cfg.filterCommon = m_filterCommon->isChecked();
     cfg.commonWordCount = m_commonCount->currentData().toInt();
     cfg.strictDictionary = m_strictDictionary->isChecked();
-    cfg.autoSnooze = m_autoSnooze->isChecked();
-    cfg.autoSnoozeScans = m_autoSnoozeScans->value();
-    cfg.autoSnoozeSeconds = m_autoSnoozeSeconds->value();
+    cfg.autoFilter = m_autoSnooze->isChecked();
+    cfg.autoFilterScans = m_autoSnoozeScans->value();
+    cfg.autoFilterSeconds = m_autoSnoozeSeconds->value();
 
     cfg.maxChips = m_maxChips->value();
     cfg.fontSize = m_fontSize->value();
