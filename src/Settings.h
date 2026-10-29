@@ -55,5 +55,9 @@ QString appDataDir();
 /// Full path of the ini file used to persist AppConfig.
 QString configFilePath();
 
+/// Full path of the SQLite database backing the user vocabulary — the
+/// known/blocked word lists and the memory-curve (auto-filter) state.
+QString databaseFilePath();
+
 AppConfig loadConfig();
 void saveConfig(const AppConfig& cfg);

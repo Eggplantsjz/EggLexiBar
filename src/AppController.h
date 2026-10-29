@@ -6,6 +6,7 @@
 #include "TesseractOcr.h"
 #include "WordFilter.h"
 #include "WordSession.h"
+#include "WordStore.h"
 
 #include <QElapsedTimer>
 #include <QImage>
@@ -85,6 +86,7 @@ private:
     AppConfig m_cfg;
     WordFilter m_filter;
     WordSession m_session;
+    WordStore m_store;
     Dictionary m_dictionary;
     OverlayBar* m_bar = nullptr;
     DetailsPanel* m_details = nullptr;

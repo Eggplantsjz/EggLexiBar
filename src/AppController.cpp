@@ -132,6 +132,22 @@ AppController::AppController(QObject* parent)
     : QObject(parent)
 {
     m_cfg = loadConfig();
+
+    // The vocabulary (known / blocked / memory-curve) lives in SQLite now. Open
+    // it, migrate any legacy ini-backed lists on first run, then treat the DB as
+    // the single source of truth for those fields.
+    QString storeError;
+    if (m_store.open(databaseFilePath(), &storeError)) {
+        m_store.migrateFromIni(m_cfg);
+        m_cfg.knownWords = m_store.knownWords();
+        m_cfg.blockedWords = m_store.blockedWords();
+        m_cfg.autoFilterState = serializeFilterState(m_store.filterState());
+    } else {
+        // Fall back to the (possibly legacy) ini lists so filtering still works
+        // even if the DB cannot be created on this machine.
+        qWarning("WordStore: %s", qPrintable(storeError));
+    }
+
     m_filter.setConfig(m_cfg);
     m_session.setPersistFilter(parseFilterState(m_cfg.autoFilterState));
 }
@@ -539,11 +555,12 @@ void AppController::handleOcr(const OcrResult& result, qint64 stamp)
                                        qMax(0, m_cfg.autoFilterSeconds) * 1000);
     }
 
-    // Persist filter state so the curve keeps advancing across restarts.
+    // Persist filter state so the curve keeps advancing across restarts. The
+    // memory-curve table now lives in SQLite (see WordStore::saveFilterState).
     const QStringList serialized = serializeFilterState(m_session.persistFilter());
     if (serialized != m_cfg.autoFilterState) {
         m_cfg.autoFilterState = serialized;
-        saveConfig(m_cfg);
+        m_store.saveFilterState(m_session.persistFilter());
     }
 
     const QVector<WordEntry> active = sortedByDifficulty(m_session.active(now, activeTtlMs()));
@@ -664,7 +681,7 @@ void AppController::markKnown(const QStringList& words)
             m_cfg.knownWords.append(normalized);
         m_session.removeWord(word);
     }
-    saveConfig(m_cfg);
+    m_store.addKnown(words);
     m_filter.setConfig(m_cfg);
     refreshWords();
     m_bar->flashMessage(words.size() == 1
@@ -684,7 +701,7 @@ void AppController::blockWords(const QStringList& words)
             m_cfg.blockedWords.append(normalized);
         m_session.removeWord(word);
     }
-    saveConfig(m_cfg);
+    m_store.addBlocked(words);
     m_filter.setConfig(m_cfg);
     refreshWords();
     m_bar->flashMessage(words.size() == 1

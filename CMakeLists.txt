@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS Widgets)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Widgets Sql)
 
 # ---------------------------------------------------------------------------
 # Core library: screen-word pipeline pieces that do not depend on widgets
@@ -18,10 +18,11 @@ set(CORE_SOURCES
     src/WordFilter.cpp
     src/WordSession.cpp
     src/WindowUtils.cpp
+    src/WordStore.cpp
 )
 
 add_library(wordlens_core STATIC ${CORE_SOURCES})
-target_link_libraries(wordlens_core PUBLIC Qt6::Gui dwmapi)
+target_link_libraries(wordlens_core PUBLIC Qt6::Gui Qt6::Sql dwmapi)
 target_include_directories(wordlens_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_definitions(wordlens_core PUBLIC
     UNICODE

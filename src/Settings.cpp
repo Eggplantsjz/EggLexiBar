@@ -25,6 +25,12 @@ QString configFilePath()
         .filePath(QStringLiteral("wordlens.ini"));
 }
 
+QString databaseFilePath()
+{
+    return QDir(QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation))
+        .filePath(QStringLiteral("wordlens.db"));
+}
+
 AppConfig loadConfig()
 {
     AppConfig cfg;
@@ -89,8 +95,9 @@ void saveConfig(const AppConfig& cfg)
     s.setValue(QStringLiteral("words/filterCommon"), cfg.filterCommon);
     s.setValue(QStringLiteral("words/commonWordCount"), cfg.commonWordCount);
     s.setValue(QStringLiteral("words/strictDictionary"), cfg.strictDictionary);
-    s.setValue(QStringLiteral("words/known"), cfg.knownWords);
-    s.setValue(QStringLiteral("words/blocked"), cfg.blockedWords);
+    // NOTE: knownWords / blockedWords are no longer persisted here — they live
+    // in the SQLite vocabulary store (see WordStore). loadConfig() still reads
+    // the legacy keys below so they can be migrated on first run.
 
     s.setValue(QStringLiteral("ui/maxChips"), cfg.maxChips);
     s.setValue(QStringLiteral("ui/fontSize"), cfg.fontSize);
@@ -100,7 +107,7 @@ void saveConfig(const AppConfig& cfg)
     s.setValue(QStringLiteral("ui/autoFilter"), cfg.autoFilter);
     s.setValue(QStringLiteral("ui/autoFilterScans"), cfg.autoFilterScans);
     s.setValue(QStringLiteral("ui/autoFilterSeconds"), cfg.autoFilterSeconds);
-    s.setValue(QStringLiteral("ui/autoFilterState"), cfg.autoFilterState);
+    // NOTE: autoFilterState (memory-curve table) now lives in the SQLite store.
     s.setValue(QStringLiteral("ui/autoHide"), cfg.autoHide);
     s.setValue(QStringLiteral("ui/autoHideSeconds"), cfg.autoHideSeconds);
     s.setValue(QStringLiteral("ui/barPosSet"), cfg.barPosSet);
