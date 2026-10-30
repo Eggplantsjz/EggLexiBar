@@ -8,6 +8,8 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPoint>
+#include <QPointF>
+#include <QSet>
 #include <QVector>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -17,12 +19,20 @@ class QHBoxLayout;
 class QVBoxLayout;
 class QToolButton;
 class QTimer;
+class QVariantAnimation;
+class QGraphicsOpacityEffect;
 class WordChip;
 class Dictionary;
 class DefinitionCard;
 class PetWidget;
 
 /// The always-on-top status bar that shows the words found on screen.
+///
+/// The bar has a fixed width derived from the screen, so words appearing or
+/// disappearing never resize it. Words that do not fit on one row are split
+/// into pages; the "1/3" pill flips pages. When nobody is using the bar, the
+/// eggplant nibbles the words one by one, flips to the next page when a page is
+/// empty and wraps back to the first page after the last one.
 class OverlayBar : public QWidget
 {
     Q_OBJECT
@@ -69,8 +79,31 @@ protected:
 private:
     WordChip* findChip(const QString& word) const;
     void syncChips(const QVector<WordEntry>& words);
-    /// Recomputes how many chips fit and resizes the bar to its content.
+    /// Re-evaluates the blue "new word" tint without touching the layout.
+    void refreshFreshness();
+    /// Re-lays the current page of chips (the bar width itself never changes).
     void updateWidth();
+    /// Picks a stable width for the bar from the screen it currently sits on.
+    void applyBarWidth();
+    /// Measures the room left for word pills after every fixed widget.
+    void measureChipBudget();
+    /// Greedily splits the chip strip into pages that fit the budget.
+    QVector<QVector<WordChip*>> paginateChips() const;
+    /// Width reserved for the "1/3" pill.
+    int pagePillWidth() const;
+    /// Shows the current page, minus the words the pet already nibbled away.
+    void layoutChips();
+    /// Advances one page, wrapping back to the first page after the last.
+    void nextPage();
+    /// Idle animation: the pet eats words when nobody is using the bar.
+    void scheduleSnack(int delayMs = -1);
+    void startSnack();
+    void finishSnack();
+    void cancelSnack();
+    void updateSnackVisual(qreal progress);
+    bool canSnack() const;
+    /// Centre of the pet's mouth, in bar coordinates.
+    QPointF petMouth() const;
     /// Shows/hides the textual status; the pet carries the state otherwise.
     void updateStatusLabel();
     /// Drives the pet's motion and status dot.
@@ -101,7 +134,7 @@ private:
     QLabel* m_hint = nullptr;
     QWidget* m_chipHost = nullptr;
     QHBoxLayout* m_chipLayout = nullptr;
-    QToolButton* m_moreBtn = nullptr;
+    QToolButton* m_pageBtn = nullptr;    // "2/4" — flips to the next page
     QToolButton* m_pauseBtn = nullptr;
     QToolButton* m_scopeBtn = nullptr;   // capture-mode quick toggle
     QToolButton* m_adjustBtn = nullptr;  // draw custom region (visible only in mode==3)
@@ -115,6 +148,20 @@ private:
     const Dictionary* m_dictionary = nullptr;
     DefinitionCard* m_card = nullptr;
     QString m_cardWord;
+
+    // Idle "pet eats a word" animation.
+    QLabel* m_flyWord = nullptr;
+    QGraphicsOpacityEffect* m_flyOpacity = nullptr;
+    QVariantAnimation* m_flyAnim = nullptr;
+    QTimer* m_snackTimer = nullptr;
+    WordChip* m_snackChip = nullptr;
+    QString m_snackWord;
+    QPointF m_flyFrom;
+    QSet<QString> m_eaten;   ///< words of the current page already eaten by the pet
+    int m_page = 0;
+
+    int m_barWidth = 0;      ///< width fixed from the screen size
+    int m_chipBudget = 0;    ///< room for pills on one page
 
     QString m_statusText;
     QString m_statusKind = QStringLiteral("idle");

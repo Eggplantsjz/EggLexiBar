@@ -9,6 +9,7 @@
 #include <QCursor>
 #include <QDateTime>
 #include <QFontMetrics>
+#include <QGraphicsOpacityEffect>
 #include <QGuiApplication>
 #include <QHideEvent>
 #include <QHBoxLayout>
@@ -17,10 +18,12 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QLinearGradient>
+#include <QRandomGenerator>
 #include <QScreen>
 #include <QTimer>
 #include <QToolButton>
 #include <QVBoxLayout>
+#include <QVariantAnimation>
 
 namespace {
 
@@ -28,6 +31,30 @@ const QColor kIdleColor(74, 222, 128);    // green
 const QColor kScanColor(122, 162, 247);   // blue
 const QColor kWarnColor(251, 191, 36);    // amber
 const QColor kErrorColor(248, 113, 113);  // red
+
+/// True when both lists contain the same words, regardless of order or hit
+/// counts: an OCR refresh that only bumps a counter must not disturb the bar.
+bool sameWordSet(const QVector<WordEntry>& a, const QVector<WordEntry>& b)
+{
+    if (a.size() != b.size())
+        return false;
+    QStringList wordsA;
+    QStringList wordsB;
+    wordsA.reserve(a.size());
+    wordsB.reserve(b.size());
+    for (const WordEntry& entry : a)
+        wordsA.append(entry.word);
+    for (const WordEntry& entry : b)
+        wordsB.append(entry.word);
+    wordsA.sort();
+    wordsB.sort();
+    return wordsA == wordsB;
+}
+
+int randomBetween(int lowMs, int highMs)
+{
+    return lowMs + int(QRandomGenerator::global()->bounded(quint32(highMs - lowMs + 1)));
+}
 
 } // namespace
 
@@ -86,20 +113,23 @@ OverlayBar::OverlayBar(QWidget* parent)
     m_chipLayout = new QHBoxLayout(m_chipHost);
     m_chipLayout->setContentsMargins(0, 0, 0, 0);
     m_chipLayout->setSpacing(10);
+    // The strip keeps a fixed width (so the page pill never moves); the trailing
+    // stretch keeps the pills packed to the left instead of spreading them out.
+    m_chipLayout->addStretch(1);
     m_chipHost->hide();
     m_row->addWidget(m_chipHost, 0, Qt::AlignVCenter);
 
-    m_moreBtn = new QToolButton(this);
-    m_moreBtn->setObjectName(QStringLiteral("barMore"));
-    m_moreBtn->setCursor(Qt::PointingHandCursor);
-    m_moreBtn->setAutoRaise(true);
-    m_moreBtn->setFixedHeight(24);
+    m_pageBtn = new QToolButton(this);
+    m_pageBtn->setObjectName(QStringLiteral("barPage"));
+    m_pageBtn->setCursor(Qt::PointingHandCursor);
+    m_pageBtn->setAutoRaise(true);
+    m_pageBtn->setFixedHeight(24);
     QFont moreFont(QStringLiteral("Microsoft YaHei UI"));
     moreFont.setPixelSize(11);
-    m_moreBtn->setFont(moreFont);
-    m_moreBtn->setToolTip(QStringLiteral("还有更多待处理生词，点击打开列表"));
-    m_moreBtn->hide();
-    m_row->addWidget(m_moreBtn, 0, Qt::AlignVCenter);
+    m_pageBtn->setFont(moreFont);
+    m_pageBtn->setToolTip(QStringLiteral("翻到下一页（最后一页之后回到第一页）"));
+    m_pageBtn->hide();
+    m_row->addWidget(m_pageBtn, 0, Qt::AlignVCenter);
 
     m_row->addStretch(1);
 
@@ -131,9 +161,11 @@ OverlayBar::OverlayBar(QWidget* parent)
         "QToolButton{border:none;border-radius:8px;color:#CBD3E1;padding:2px;}"
         "QToolButton:hover{background:rgba(255,255,255,38);color:#F2F5FA;}"
         "QToolButton:pressed{background:rgba(255,255,255,64);}"
-        "QToolButton#barMore{color:#9CC1FF;border:1px solid rgba(122,162,247,90);"
+        "QToolButton#barPage{color:#9CC1FF;border:1px solid rgba(122,162,247,90);"
         "border-radius:11px;padding:0 10px;}"
-        "QToolButton#barMore:hover{background:rgba(122,162,247,50);color:#EAF1FF;}"));
+        "QToolButton#barPage:hover{background:rgba(122,162,247,50);color:#EAF1FF;}"
+        "QLabel#flyWord{background:rgba(58,64,84,240);border-radius:12px;"
+        "color:#E9EDF7;padding:4px 12px;}"));
 
     connect(m_pauseBtn, &QToolButton::clicked, this, &OverlayBar::pauseToggled);
     connect(m_scopeBtn, &QToolButton::clicked, this, [this] {
@@ -146,7 +178,7 @@ OverlayBar::OverlayBar(QWidget* parent)
     connect(m_listBtn, &QToolButton::clicked, this, &OverlayBar::detailsRequested);
     connect(m_settingsBtn, &QToolButton::clicked, this, &OverlayBar::settingsRequested);
     connect(m_hideBtn, &QToolButton::clicked, this, &OverlayBar::hideRequested);
-    connect(m_moreBtn, &QToolButton::clicked, this, &OverlayBar::detailsRequested);
+    connect(m_pageBtn, &QToolButton::clicked, this, [this] { nextPage(); });
 
     m_autoHideTimer = new QTimer(this);
     m_autoHideTimer->setSingleShot(true);
@@ -174,6 +206,32 @@ OverlayBar::OverlayBar(QWidget* parent)
         m_flashText.clear();
         setStatus(m_statusText, m_statusKind);
     });
+
+    // --- idle snack: the pet eats a word when the bar is left alone ---------
+    m_snackTimer = new QTimer(this);
+    m_snackTimer->setSingleShot(true);
+    connect(m_snackTimer, &QTimer::timeout, this, &OverlayBar::startSnack);
+
+    // The "word" that flies from the strip into the pet's mouth. It is a child
+    // of the bar (not of the chip) so it can leave the chip rect and stay above
+    // the other children while it travels.
+    m_flyWord = new QLabel(this);
+    m_flyWord->setObjectName(QStringLiteral("flyWord"));
+    m_flyWord->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+    m_flyWord->hide();
+
+    m_flyOpacity = new QGraphicsOpacityEffect(m_flyWord);
+    m_flyOpacity->setOpacity(1.0);
+    m_flyWord->setGraphicsEffect(m_flyOpacity);
+
+    m_flyAnim = new QVariantAnimation(this);
+    m_flyAnim->setStartValue(0.0);
+    m_flyAnim->setEndValue(1.0);
+    m_flyAnim->setDuration(460);
+    m_flyAnim->setEasingCurve(QEasingCurve::InCubic);
+    connect(m_flyAnim, &QVariantAnimation::valueChanged, this,
+            [this](const QVariant& value) { updateSnackVisual(value.toReal()); });
+    connect(m_flyAnim, &QVariantAnimation::finished, this, &OverlayBar::finishSnack);
 }
 
 void OverlayBar::applyConfig(const AppConfig& cfg)
@@ -209,8 +267,9 @@ void OverlayBar::applyConfig(const AppConfig& cfg)
     setFixedHeight(qMax(chipHeight + 18, petHeight + 12));
 
     // Update the capture-mode button visibility before measuring the row, so
-    // the custom-region "adjust" button is included in the width.
+    // the custom-region "adjust" button is part of the budget.
     setCaptureMode(m_cfg.captureMode);
+    applyBarWidth();
     updateWidth();
     update();
 
@@ -218,6 +277,9 @@ void OverlayBar::applyConfig(const AppConfig& cfg)
         centerOnScreen();
     else
         placeAtSavedPosition();
+
+    cancelSnack();
+    scheduleSnack();
 }
 
 void OverlayBar::setDictionary(const Dictionary* dictionary)
@@ -301,6 +363,12 @@ void OverlayBar::setPaused(bool paused)
 {
     m_paused = paused;
     m_pauseBtn->setText(paused ? QStringLiteral("▶") : QStringLiteral("❚❚"));
+    // While paused the user wants to look at the words, not lose them to a
+    // hungry eggplant.
+    if (paused)
+        cancelSnack();
+    else
+        scheduleSnack();
     updatePet();
 }
 
@@ -336,6 +404,8 @@ void OverlayBar::setScanning(bool scanning)
 void OverlayBar::setEngineReady(bool ready)
 {
     m_engineReady = ready;
+    if (!ready)
+        cancelSnack();
     updatePet();
 }
 
@@ -355,13 +425,22 @@ QRect OverlayBar::popupGeometry() const
 
 void OverlayBar::setWords(const QVector<WordEntry>& words)
 {
+    const bool changed = !sameWordSet(m_lastWords, words);
     m_lastWords = words;
     m_count->setText(QStringLiteral("%1 生词").arg(words.size()));
+    // Let the blue "new word" tint expire even while the layout is frozen:
+    // otherwise a pointer resting on the bar keeps the chips blue forever.
+    refreshFreshness();
+
+    // A new word list invalidates the idle animation: whatever the pet already
+    // nibbled away comes back so the strip matches the session again.
+    if (changed)
+        cancelSnack();
 
     // While the pointer is on (or near) the bar, or a card is open, freeze the
-    // whole layout: resizing or re-ordering would slide the buttons and chips
-    // out from under the cursor. The pending state is applied as soon as the
-    // pointer leaves (see refreshLayout()).
+    // whole layout: re-ordering would slide the chips out from under the cursor.
+    // The pending state is applied as soon as the pointer leaves (see
+    // refreshLayout()).
     //
     // An empty word list is the exception: there is no chip to click any more,
     // and freezing would leave stale words on screen indefinitely.
@@ -371,6 +450,28 @@ void OverlayBar::setWords(const QVector<WordEntry>& words)
 
     syncChips(words);
     updateWidth();
+
+    if (changed && !m_chips.isEmpty())
+        scheduleSnack();
+}
+
+void OverlayBar::refreshFreshness()
+{
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    for (WordChip* chip : m_chips) {
+        qint64 firstSeen = -1;
+        for (const WordEntry& entry : m_lastWords) {
+            if (entry.word == chip->word()) {
+                firstSeen = entry.firstSeen;
+                break;
+            }
+        }
+        // Chips that are only still on screen because the layout is frozen keep
+        // their current look; there is no fresh entry to compare against.
+        if (firstSeen < 0)
+            continue;
+        chip->setFresh(now - firstSeen < 4000);
+    }
 }
 
 void OverlayBar::refreshLayout()
@@ -492,7 +593,8 @@ void OverlayBar::syncChips(const QVector<WordEntry>& words)
             connect(chip, &WordChip::hoverStarted, this, &OverlayBar::showWordCard);
             connect(chip, &WordChip::hoverEnded, this, &OverlayBar::hideWordCard);
 
-            m_chipLayout->addWidget(chip, 0, Qt::AlignVCenter);
+            m_chipLayout->insertWidget(qMax(0, m_chipLayout->count() - 1), chip, 0,
+                                       Qt::AlignVCenter);
         }
 
         chip->setCount(entry.count);
@@ -505,36 +607,25 @@ void OverlayBar::syncChips(const QVector<WordEntry>& words)
 
 void OverlayBar::updateWidth()
 {
-    const bool hasChips = !m_chips.isEmpty();
-    const bool cardOpen = m_card && m_card->isVisible();
+    layoutChips();
+    clampToScreen();
+}
 
-    // Never resize the bar while the pointer is on or near it (or while a card
-    // is open): the right-hand buttons would slide out from under the cursor
-    // and the user would click the wrong one. The pending layout is applied by
-    // the first update after the pointer moves away.
-    if (hasChips && (pointerIsNearBar() || cardOpen)) {
-        clampToScreen();
-        return;
-    }
-
-    if (!hasChips)
-        hideWordCardNow();
-    m_hint->setVisible(!hasChips);
-    // With no words at all the hint already says everything; a lone "0 生词"
-    // next to it is just noise.
-    m_count->setVisible(hasChips);
-
+void OverlayBar::applyBarWidth()
+{
     QScreen* target = screen() ? screen() : QGuiApplication::primaryScreen();
     const int screenWidth = target ? target->availableGeometry().width() : 1920;
-    const int maxBarWidth = qBound(420, qMin(1240, screenWidth - 200), 1400);
+    // Fixed by design: the bar never grows or shrinks when words appear, so the
+    // buttons stay where the user expects them. Only the screen size decides.
+    m_barWidth = qBound(560, qMin(1320, screenWidth - 200), 1320);
+    setFixedWidth(m_barWidth);
+}
 
-    // Measure everything that is not a word pill. Hidden widgets are ignored by
-    // the layout, so take the strip and the "+N" pill out of the equation first;
-    // their space is budgeted separately. The widths are summed by hand instead
-    // of asking the row layout, whose cached sizeHint can still contain the
-    // hidden chip strip and would collapse the strip to a single pill.
-    m_chipHost->hide();
-    m_moreBtn->hide();
+void OverlayBar::measureChipBudget()
+{
+    // Widths are summed widget by widget instead of asking the row layout:
+    // its cached sizeHint can still contain the chip strip and would collapse
+    // the page to a single pill.
     int fixedWidth = 0;
     int fixedWidgets = 0;
     const auto addFixed = [&](QWidget* widget) {
@@ -555,60 +646,281 @@ void OverlayBar::updateWidth()
     addFixed(m_hideBtn);
     const QMargins margins = m_outer->contentsMargins();
     fixedWidth += margins.left() + margins.right();
-    // Gaps: between every fixed widget, plus one slot for the strip and one for
-    // the "+N" pill (the right-side stretch adds one more).
+    // Gaps: between every fixed widget, plus the slot for the strip, the page
+    // pill and the right-side stretch.
     fixedWidth += (fixedWidgets + 3) * m_row->spacing();
+    m_chipBudget = qMax(120, (m_barWidth > 0 ? m_barWidth : width()) - fixedWidth);
+}
 
-    const QFontMetrics moreMetrics(m_moreBtn->font());
-    const int moreWidth = moreMetrics.horizontalAdvance(QStringLiteral("+888")) + 26;
-    const int baseBudget = qMax(120, maxBarWidth - fixedWidth);
+namespace {
 
-    // Show as many pills as fit, whole. Never compress a pill: its text would
-    // be clipped (the old scroll-area layout did exactly that). Only reserve
-    // room for the "+N" pill when something actually has to be hidden, so a bar
-    // that fits everything does not waste a slot.
+/// Packs @p chips into pages no wider than @p budget, keeping list order.
+QVector<QVector<WordChip*>> packChips(const QVector<WordChip*>& chips, int budget,
+                                      int cap, int spacing)
+{
+    QVector<QVector<WordChip*>> pages;
+    QVector<WordChip*> page;
+    int used = 0;
+    for (WordChip* chip : chips) {
+        const int width = chip->sizeHint().width();
+        const int extra = width + (page.isEmpty() ? 0 : spacing);
+        const bool full = !page.isEmpty() && used + extra > budget;
+        if (full || page.size() >= cap) {
+            pages.append(page);
+            page.clear();
+            used = 0;
+        }
+        used += page.isEmpty() ? width : width + spacing;
+        page.append(chip);
+    }
+    if (!page.isEmpty())
+        pages.append(page);
+    return pages;
+}
+
+} // namespace
+
+int OverlayBar::pagePillWidth() const
+{
+    const QFontMetrics fm(m_pageBtn->font());
+    return fm.horizontalAdvance(QStringLiteral("99/99")) + 26;
+}
+
+QVector<QVector<WordChip*>> OverlayBar::paginateChips() const
+{
     const int cap = qBound(1, m_cfg.maxChips, 40);
     const int spacing = m_chipLayout->spacing();
-    const auto countFitting = [&](int budget) {
-        int used = 0;
-        int count = 0;
-        for (WordChip* chip : m_chips) {
-            if (count >= cap)
-                break;
-            const int extra = chip->sizeHint().width() + (count > 0 ? spacing : 0);
-            if (count > 0 && used + extra > budget)
-                break;
-            used += extra;
-            ++count;
-        }
-        return count;
-    };
+    QVector<QVector<WordChip*>> pages = packChips(m_chips, m_chipBudget, cap, spacing);
+    if (pages.size() > 1) {
+        // The page pill only exists when there are several pages; make room for
+        // it by repacking, so the last pill of a page can never overflow.
+        pages = packChips(m_chips, qMax(120, m_chipBudget - pagePillWidth()), cap,
+                          spacing);
+    }
+    return pages;
+}
 
-    const int total = qMax(m_lastWords.size(), m_chips.size());
-    int visible = countFitting(baseBudget - moreWidth);
-    if (visible >= total)
-        visible = countFitting(baseBudget);
+void OverlayBar::layoutChips()
+{
+    const bool hasChips = !m_chips.isEmpty();
+    if (!hasChips)
+        hideWordCardNow();
 
-    for (int i = 0; i < m_chips.size(); ++i)
-        m_chips.at(i)->setVisible(i < visible);
-
-    if (hasChips && visible < total) {
-        const int hidden = total - visible;
-        m_moreBtn->setText(QStringLiteral("+%1").arg(hidden));
-        m_moreBtn->setToolTip(
-            QStringLiteral("还有 %1 个生词未显示，点击打开列表").arg(hidden));
-        m_moreBtn->show();
+    m_hint->setVisible(!hasChips);
+    // With no words at all the hint already says everything; a lone "0 生词"
+    // next to it is just noise.
+    m_count->setVisible(hasChips);
+    m_chipHost->setVisible(hasChips);
+    if (!hasChips) {
+        m_pageBtn->hide();
+        return;
     }
 
-    m_chipHost->setVisible(hasChips);
-    adjustSize();
+    measureChipBudget();
+    const QVector<QVector<WordChip*>> pages = paginateChips();
+    const int pageCount = qMax(1, pages.size());
+    if (m_page >= pageCount)
+        m_page = 0;
 
-    // Keep the bar centred while its width changes; it is only resized when the
-    // pointer is away, so this cannot yank the bar from under the cursor.
-    if (!m_userMoved)
-        centerOnScreen();
-    else
-        clampToScreen();
+    // Keep the strip at a constant width so the page pill (and everything to its
+    // right) stays put while the pet nibbles words away.
+    m_chipHost->setFixedWidth(qMax(60, m_chipBudget - (pageCount > 1 ? pagePillWidth() : 0) - 2));
+
+    // Words the pet has eaten stay hidden until the page is turned; everything
+    // else on the current page is shown at its full width.
+    for (WordChip* chip : m_chips)
+        chip->hide();
+    for (WordChip* chip : pages.value(m_page))
+        chip->setVisible(!m_eaten.contains(chip->word()));
+
+    if (pageCount > 1) {
+        m_pageBtn->setText(QStringLiteral("%1/%2").arg(m_page + 1).arg(pageCount));
+        m_pageBtn->setToolTip(
+            QStringLiteral("第 %1 页 / 共 %2 页 · 点击翻页（最后一页之后回到第一页）")
+                .arg(m_page + 1)
+                .arg(pageCount));
+        m_pageBtn->show();
+    } else {
+        m_pageBtn->hide();
+    }
+}
+
+void OverlayBar::nextPage()
+{
+    const QVector<QVector<WordChip*>> pages = paginateChips();
+    if (pages.size() <= 1)
+        return;
+    m_page = (m_page + 1) % pages.size();
+    m_eaten.clear();
+    if (m_flyAnim && m_flyAnim->state() == QAbstractAnimation::Running)
+        m_flyAnim->stop();
+    if (m_flyWord)
+        m_flyWord->hide();
+    m_snackWord.clear();
+    m_snackChip = nullptr;
+    layoutChips();
+    scheduleSnack();
+}
+
+QPointF OverlayBar::petMouth() const
+{
+    if (!m_pet)
+        return QPointF(40, height() / 2.0);
+    const QRect g = m_pet->geometry();
+    return QPointF(g.center().x(), g.top() + g.height() * 0.72);
+}
+
+bool OverlayBar::canSnack() const
+{
+    return isVisible() && m_engineReady && !m_paused && !m_chips.isEmpty()
+           && !pointerIsNearBar() && !(m_card && m_card->isVisible())
+           && m_chipHost && !m_chipHost->isHidden()
+           && (!m_flyAnim || m_flyAnim->state() != QAbstractAnimation::Running);
+}
+
+void OverlayBar::scheduleSnack(int delayMs)
+{
+    if (!m_snackTimer)
+        return;
+    m_snackTimer->start(delayMs > 0 ? delayMs : randomBetween(5000, 11000));
+}
+
+void OverlayBar::startSnack()
+{
+    if (!canSnack()) {
+        scheduleSnack(6000);
+        return;
+    }
+
+    const QVector<QVector<WordChip*>> pages = paginateChips();
+    const QVector<WordChip*> page = pages.value(m_page);
+    WordChip* victim = nullptr;
+    for (WordChip* chip : page) {
+        if (chip->isVisible()) {
+            victim = chip;
+            break;
+        }
+    }
+
+    if (!victim) {
+        // The page is already empty: turn to the next one and let the pet rest
+        // for a moment before the next snack.
+        if (pages.size() > 1) {
+            nextPage();
+            scheduleSnack(2600);
+        } else {
+            m_eaten.clear();
+            layoutChips();
+            scheduleSnack(5000);
+        }
+        return;
+    }
+
+    m_snackChip = victim;
+    m_snackWord = victim->word();
+    m_flyFrom = QPointF(victim->mapTo(this, QPoint(0, 0)).x() + victim->width() / 2.0,
+                        victim->mapTo(this, QPoint(0, 0)).y() + victim->height() / 2.0);
+
+    QFont flyFont(QStringLiteral("Segoe UI"));
+    flyFont.setPixelSize(qBound(10, m_cfg.fontSize, 26));
+    m_flyWord->setFont(flyFont);
+    m_flyWord->setText(m_snackWord);
+    m_flyWord->adjustSize();
+    m_flyWord->raise();
+    m_flyOpacity->setOpacity(1.0);
+    m_flyWord->show();
+    updateSnackVisual(0.0);
+
+    victim->hide();
+    m_flyAnim->start();
+}
+
+void OverlayBar::updateSnackVisual(qreal progress)
+{
+    if (!m_flyWord || m_flyWord->isHidden())
+        return;
+
+    const qreal t = qBound<qreal>(0.0, progress, 1.0);
+    const QPointF from = m_flyFrom;
+    const QPointF to = petMouth();
+    // Slight hop: the word arcs upward before dropping into the mouth.
+    const QPointF control((from.x() + to.x()) / 2.0,
+                          qMin(from.y(), to.y()) - 12.0);
+    const qreal u = 1.0 - t;
+    const QPointF p = u * u * from + 2.0 * u * t * control + t * t * to;
+
+    m_flyOpacity->setOpacity(qBound(0.0, 1.0 - t * t, 1.0));
+    // Keep the sprite inside the bar: the arc can otherwise poke past the top
+    // edge and get clipped mid-flight.
+    const int x = qBound(0, qRound(p.x() - m_flyWord->width() / 2.0),
+                         qMax(0, width() - m_flyWord->width()));
+    const int y = qBound(0, qRound(p.y() - m_flyWord->height() / 2.0),
+                         qMax(0, height() - m_flyWord->height()));
+    m_flyWord->move(x, y);
+    m_flyWord->raise();
+}
+
+void OverlayBar::finishSnack()
+{
+    if (m_flyWord)
+        m_flyWord->hide();
+
+    const QString word = m_snackWord;
+    m_snackWord.clear();
+    m_snackChip = nullptr;
+    if (word.isEmpty())
+        return;
+
+    if (m_pet)
+        m_pet->eat(word);
+    m_eaten.insert(word);
+    layoutChips();
+
+    // Page finished → show the next one; after the last page, wrap to the first
+    // page with all its words restored.
+    const QVector<QVector<WordChip*>> pages = paginateChips();
+    bool anyLeft = false;
+    for (WordChip* chip : pages.value(m_page)) {
+        if (!m_eaten.contains(chip->word())) {
+            anyLeft = true;
+            break;
+        }
+    }
+
+    if (!anyLeft) {
+        if (pages.size() > 1) {
+            m_page = (m_page + 1) % pages.size();
+            m_eaten.clear();
+            layoutChips();
+            scheduleSnack(2800);
+        } else {
+            m_eaten.clear();
+            layoutChips();
+            scheduleSnack(5200);
+        }
+        return;
+    }
+
+    scheduleSnack(randomBetween(1500, 3200));
+}
+
+void OverlayBar::cancelSnack()
+{
+    if (m_snackTimer)
+        m_snackTimer->stop();
+    if (m_flyAnim && m_flyAnim->state() == QAbstractAnimation::Running)
+        m_flyAnim->stop();
+    if (m_flyWord)
+        m_flyWord->hide();
+    m_snackWord.clear();
+    m_snackChip = nullptr;
+
+    if (m_eaten.isEmpty())
+        return;
+    m_eaten.clear();
+    // The words come back immediately: the pointer is heading for the bar and
+    // the user expects to see the whole list.
+    layoutChips();
 }
 
 bool OverlayBar::pointerIsOnBar() const
@@ -641,14 +953,21 @@ void OverlayBar::centerOnScreen()
 
 void OverlayBar::clampToScreen()
 {
-    QScreen* target = QGuiApplication::screenAt(frameGeometry().center());
+    // Prefer the screen that owns the bar's top-left corner. With a fixed width
+    // the bar can reach past a narrow secondary monitor, and using the centre
+    // would fall outside every screen and yank the bar to the primary.
+    QScreen* target = QGuiApplication::screenAt(pos());
+    if (!target)
+        target = QGuiApplication::screenAt(frameGeometry().center());
+    if (!target)
+        target = screen();
     if (!target)
         target = QGuiApplication::primaryScreen();
     if (!target)
         return;
     const QRect available = target->availableGeometry();
-    const int nx = qBound(available.left(), x(), available.right() - width());
-    const int ny = qBound(available.top(), y(), available.bottom() - height());
+    const int nx = qBound(available.left(), x(), available.right() - width() + 1);
+    const int ny = qBound(available.top(), y(), available.bottom() - height() + 1);
     if (nx != x() || ny != y())
         move(nx, ny);
 }
@@ -689,6 +1008,8 @@ void OverlayBar::showWordCard(WordChip* chip)
     if (m_cardHideTimer) m_cardHideTimer->stop();
     if (!chip || !isVisible() || !m_dictionary || !m_dictionary->isLoaded())
         return;
+
+    cancelSnack();
 
     const WordDefinition definition = m_dictionary->lookup(chip->word());
     if (!definition.isValid()) return;
@@ -769,6 +1090,7 @@ void OverlayBar::paintEvent(QPaintEvent*)
 void OverlayBar::mousePressEvent(QMouseEvent* event)
 {
     hideWordCardNow();
+    cancelSnack();
     if (event->button() == Qt::LeftButton) {
         m_dragging = true;
         m_dragMoved = false;
@@ -802,6 +1124,10 @@ void OverlayBar::mouseReleaseEvent(QMouseEvent* event)
         m_dragging = false;
         if (m_dragMoved) {
             m_userMoved = true;
+            // A drag can move the bar to another monitor: re-derive its fixed
+            // width from that screen.
+            applyBarWidth();
+            updateWidth();
             clampToScreen();
             emit barMoved(pos());
         }
@@ -817,17 +1143,21 @@ void OverlayBar::showEvent(QShowEvent* event)
 {
     QWidget::showEvent(event);
     placeAtSavedPosition();
+    scheduleSnack();
 }
 
 void OverlayBar::hideEvent(QHideEvent* event)
 {
     hideWordCardNow();
+    cancelSnack();
     QWidget::hideEvent(event);
 }
 
 void OverlayBar::enterEvent(QEnterEvent* event)
 {
     m_autoHideTimer->stop();
+    // The user is here: give the words back and stop nibbling.
+    cancelSnack();
     QWidget::enterEvent(event);
 }
 
@@ -836,6 +1166,7 @@ void OverlayBar::leaveEvent(QEvent* event)
     startAutoHideTimer();
     // The layout was frozen while the pointer was here; catch up now.
     refreshLayout();
+    scheduleSnack();
     QWidget::leaveEvent(event);
 }
 
