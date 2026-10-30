@@ -3,6 +3,7 @@
 #include "DefinitionCard.h"
 #include "Dictionary.h"
 #include "PetWidget.h"
+#include "SnackBubble.h"
 #include "WordChip.h"
 
 #include <QApplication>
@@ -232,6 +233,10 @@ OverlayBar::OverlayBar(QWidget* parent)
     connect(m_flyAnim, &QVariantAnimation::valueChanged, this,
             [this](const QVariant& value) { updateSnackVisual(value.toReal()); });
     connect(m_flyAnim, &QVariantAnimation::finished, this, &OverlayBar::finishSnack);
+
+    // The bar is too short to print a definition, so the pet's meal shows up in
+    // a small bubble under its mouth for a couple of seconds.
+    m_snackBubble = new SnackBubble(this);
 }
 
 void OverlayBar::applyConfig(const AppConfig& cfg)
@@ -420,6 +425,13 @@ QRect OverlayBar::popupGeometry() const
 {
     if (m_card && m_card->isVisible())
         return m_card->frameGeometry();
+    return {};
+}
+
+QRect OverlayBar::snackGeometry() const
+{
+    if (m_snackBubble && m_snackBubble->isVisible())
+        return m_snackBubble->frameGeometry();
     return {};
 }
 
@@ -756,6 +768,8 @@ void OverlayBar::nextPage()
         m_flyAnim->stop();
     if (m_flyWord)
         m_flyWord->hide();
+    if (m_snackBubble)
+        m_snackBubble->hideNow();
     m_snackWord.clear();
     m_snackChip = nullptr;
     layoutChips();
@@ -876,8 +890,10 @@ void OverlayBar::finishSnack()
     m_eaten.insert(word);
     layoutChips();
 
-    // Page finished → show the next one; after the last page, wrap to the first
-    // page with all its words restored.
+    // Page finished → turn to the next one; after the last page, wrap to the
+    // first page with all its words restored. The flip is done inline (instead
+    // of nextPage()) so the meaning bubble for the last word of the page stays
+    // on screen: the user just watched that word disappear.
     const QVector<QVector<WordChip*>> pages = paginateChips();
     bool anyLeft = false;
     for (WordChip* chip : pages.value(m_page)) {
@@ -887,21 +903,29 @@ void OverlayBar::finishSnack()
         }
     }
 
-    if (!anyLeft) {
+    if (!anyLeft && !pages.isEmpty()) {
         if (pages.size() > 1) {
             m_page = (m_page + 1) % pages.size();
             m_eaten.clear();
             layoutChips();
-            scheduleSnack(2800);
         } else {
             m_eaten.clear();
             layoutChips();
-            scheduleSnack(5200);
         }
-        return;
     }
 
-    scheduleSnack(randomBetween(1500, 3200));
+    // Show the word with its meaning, like the pet showing what it is chewing.
+    if (m_dictionary && m_dictionary->isLoaded() && !pointerIsNearBar()) {
+        const WordDefinition definition = m_dictionary->lookup(word);
+        if (definition.isValid()) {
+            const QRect anchor(m_pet->mapToGlobal(QPoint(0, 0)), m_pet->size());
+            m_snackBubble->showFor(definition, anchor);
+        }
+    }
+
+    // Slower than the old purely decorative pace: the bubble needs a moment to
+    // be read before the next word flies in.
+    scheduleSnack(anyLeft ? randomBetween(2800, 4200) : randomBetween(3000, 4400));
 }
 
 void OverlayBar::cancelSnack()
@@ -912,6 +936,8 @@ void OverlayBar::cancelSnack()
         m_flyAnim->stop();
     if (m_flyWord)
         m_flyWord->hide();
+    if (m_snackBubble)
+        m_snackBubble->hideNow();
     m_snackWord.clear();
     m_snackChip = nullptr;
 

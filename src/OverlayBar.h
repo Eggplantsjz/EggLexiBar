@@ -25,6 +25,7 @@ class WordChip;
 class Dictionary;
 class DefinitionCard;
 class PetWidget;
+class SnackBubble;
 
 /// The always-on-top status bar that shows the words found on screen.
 ///
@@ -44,6 +45,8 @@ public:
     void setWords(const QVector<WordEntry>& words);
     /// Geometry of the hover card while it is visible (used to exclude it from OCR).
     QRect popupGeometry() const;
+    /// Geometry of the "what the pet just ate" bubble while it is visible.
+    QRect snackGeometry() const;
     void setStatus(const QString& text, const QString& kind = QStringLiteral("idle"));
     void setPaused(bool paused);
     void setScanning(bool scanning);
@@ -147,6 +150,7 @@ private:
     QVector<WordChip*> m_chips;
     const Dictionary* m_dictionary = nullptr;
     DefinitionCard* m_card = nullptr;
+    SnackBubble* m_snackBubble = nullptr;
     QString m_cardWord;
 
     // Idle "pet eats a word" animation.

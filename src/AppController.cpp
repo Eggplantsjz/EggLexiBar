@@ -853,6 +853,7 @@ QVector<QRect> AppController::exclusionRects(const QSize& imageSize, const QPoin
     if (m_bar && m_bar->isVisible()) {
         add(m_bar->frameGeometry());
         add(m_bar->popupGeometry());
+        add(m_bar->snackGeometry());
     }
     if (m_details && m_details->isVisible())
         add(m_details->frameGeometry());

@@ -41,6 +41,7 @@ set(GUI_SOURCES
     src/AppController.cpp
     src/DefinitionCard.cpp
     src/OverlayBar.cpp
+    src/SnackBubble.cpp
     src/WordChip.cpp
     src/DetailsPanel.cpp
     src/SettingsDialog.cpp
