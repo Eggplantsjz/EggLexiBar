@@ -9,7 +9,6 @@
 #include <QLabel>
 #include <QPoint>
 #include <QPointF>
-#include <QSet>
 #include <QVector>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -25,6 +24,7 @@ class WordChip;
 class Dictionary;
 class DefinitionCard;
 class PetWidget;
+class PetStats;
 class SnackBubble;
 
 /// The always-on-top status bar that shows the words found on screen.
@@ -52,6 +52,10 @@ public:
     void setScanning(bool scanning);
     void setEngineReady(bool ready);
     void flashMessage(const QString& text);
+    /// Updates the pixel meter next to the pet (today's pet statistics).
+    void setPetStats(int eaten, int familiar, int seen, int goal);
+    /// Replaces the "waiting for words" hint (e.g. when everything is digested).
+    void setEmptyHint(const QString& text);
     /// Updates the capture-mode button glyph/tooltip after cfg changes.
     void setCaptureMode(int mode);
 
@@ -65,6 +69,9 @@ signals:
     void copyRequested(const QString& word);
     void markKnownRequested(const QString& word);
     void blockRequested(const QString& word);
+    /// The pet swallowed a word (idle snack). The session turns this into a
+    /// digestion cooldown and the daily counters.
+    void wordEaten(const QString& word);
     /// The user actually looked at this word (used to protect it from auto-snooze).
     void wordInspected(const QString& word);
     void barMoved(const QPoint& pos);
@@ -103,6 +110,9 @@ private:
     void startSnack();
     void finishSnack();
     void cancelSnack();
+    /// Stops a snack that is still flying, without touching a bubble that is
+    /// already showing a finished meal.
+    void cancelSnackFlight();
     void updateSnackVisual(qreal progress);
     bool canSnack() const;
     /// Centre of the pet's mouth, in bar coordinates.
@@ -133,6 +143,7 @@ private:
     QHBoxLayout* m_row = nullptr;
     QLabel* m_status = nullptr;
     PetWidget* m_pet = nullptr;
+    PetStats* m_stats = nullptr;
     QLabel* m_count = nullptr;
     QLabel* m_hint = nullptr;
     QWidget* m_chipHost = nullptr;
@@ -161,9 +172,7 @@ private:
     WordChip* m_snackChip = nullptr;
     QString m_snackWord;
     QPointF m_flyFrom;
-    QSet<QString> m_eaten;   ///< words of the current page already eaten by the pet
     int m_page = 0;
-
     int m_barWidth = 0;      ///< width fixed from the screen size
     int m_chipBudget = 0;    ///< room for pills on one page
 

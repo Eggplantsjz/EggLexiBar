@@ -72,6 +72,11 @@ AppConfig loadConfig()
     cfg.barPosSet = s.value(QStringLiteral("ui/barPosSet"), false).toBool();
     cfg.barPos = s.value(QStringLiteral("ui/barPos"), QPoint()).toPoint();
 
+    cfg.snackCooldownSeconds =
+        s.value(QStringLiteral("pet/snackCooldownSeconds"), cfg.snackCooldownSeconds).toInt();
+    cfg.snackGoalPerDay =
+        s.value(QStringLiteral("pet/snackGoalPerDay"), cfg.snackGoalPerDay).toInt();
+
     return cfg;
 }
 
@@ -112,6 +117,9 @@ void saveConfig(const AppConfig& cfg)
     s.setValue(QStringLiteral("ui/autoHideSeconds"), cfg.autoHideSeconds);
     s.setValue(QStringLiteral("ui/barPosSet"), cfg.barPosSet);
     s.setValue(QStringLiteral("ui/barPos"), cfg.barPos);
+
+    s.setValue(QStringLiteral("pet/snackCooldownSeconds"), cfg.snackCooldownSeconds);
+    s.setValue(QStringLiteral("pet/snackGoalPerDay"), cfg.snackGoalPerDay);
 
     s.sync();
 }

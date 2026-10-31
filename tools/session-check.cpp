@@ -214,6 +214,45 @@ void testDictionaryGate()
     check(emptyCards == 0, QStringLiteral("every listed word has a card"));
 }
 
+/// The pet's meal takes the word off the bar for a while, then it returns.
+void testPetCooldown()
+{
+    qInfo() << "eaten words leave the bar and come back";
+    WordSession session;
+    const qint64 t0 = 6000000;
+
+    session.ingest(hits({QStringLiteral("eggplant"), QStringLiteral("meticulous")}), t0);
+    check(session.markEaten(QStringLiteral("eggplant"), t0 + 1000, 120000),
+          QStringLiteral("markEaten finds the word"));
+    check(wordsOf(session.active(t0 + 2000, 0)) == QStringList{QStringLiteral("meticulous")},
+          QStringLiteral("eaten word leaves the bar"));
+    check(session.digestingCount(t0 + 2000) == 1, QStringLiteral("belly holds one word"));
+    check(!session.markEaten(QStringLiteral("zebra"), t0 + 2000, 120000),
+          QStringLiteral("unknown word cannot be eaten"));
+
+    // A re-scan while digesting must not bring the word back early.
+    session.ingest(hits({QStringLiteral("eggplant")}), t0 + 30000);
+    check(wordsOf(session.active(t0 + 31000, 0)) == QStringList{QStringLiteral("meticulous")},
+          QStringLiteral("re-scan while digesting stays hidden"));
+
+    session.resurface(t0 + 122000);
+    check(session.digestingCount(t0 + 122000) == 0,
+          QStringLiteral("belly is empty after the cooldown"));
+    check(wordsOf(session.active(t0 + 122000, 0))
+              == QStringList({QStringLiteral("eggplant"), QStringLiteral("meticulous")}),
+          QStringLiteral("eaten word returns to the bar"));
+
+    // A word being digested is not retired by the memory curve behind the
+    // scenes (it cannot be hovered while it is invisible).
+    WordSession quiet;
+    quiet.ingest(hits({QStringLiteral("boundary")}), t0);
+    quiet.ingest(hits({QStringLiteral("boundary")}), t0 + 1000);
+    quiet.ingest(hits({QStringLiteral("boundary")}), t0 + 2000);
+    quiet.markEaten(QStringLiteral("boundary"), t0 + 2500, 600000);
+    check(quiet.autoFilter(t0 + 60000, 3, 20000) == 0,
+          QStringLiteral("digesting word is not auto-retired"));
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -226,6 +265,7 @@ int main(int argc, char** argv)
     testRestoreSnoozedWord();
     testNewBatchesDoNotEvictOldWords();
     testCountsAccumulate();
+    testPetCooldown();
     testDictionaryGate();
 
     if (g_failed == 0) {

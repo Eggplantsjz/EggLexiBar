@@ -3,6 +3,7 @@
 #include "DefinitionCard.h"
 #include "Dictionary.h"
 #include "PetWidget.h"
+#include "PetStats.h"
 #include "SnackBubble.h"
 #include "WordChip.h"
 
@@ -97,6 +98,11 @@ OverlayBar::OverlayBar(QWidget* parent)
     // permanent status label eating space on the left.
     m_pet = new PetWidget(this);
     m_row->addWidget(m_pet, 0, Qt::AlignVCenter);
+
+    // The pixel meter: meals eaten today, a fullness gauge and the share of the
+    // day's words that are already familiar.
+    m_stats = new PetStats(this);
+    m_row->addWidget(m_stats, 0, Qt::AlignVCenter);
 
     // Only errors, the paused state and transient messages need words. The label
     // is hidden otherwise, letting the words start right next to the pet.
@@ -421,6 +427,30 @@ void OverlayBar::flashMessage(const QString& text)
     setStatus(m_statusText, m_statusKind);
 }
 
+void OverlayBar::setPetStats(int eaten, int familiar, int seen, int goal)
+{
+    if (!m_stats)
+        return;
+    m_stats->setStats(eaten, familiar, seen, goal);
+    const int percent = seen > 0 ? qRound(100.0 * double(familiar) / double(seen)) : 0;
+    m_stats->setToolTip(
+        QStringLiteral("今天吃掉 %1 个词 · 饱腹 %1/%2\n"
+                       "熟悉 %3/%4 个词（%5%）\n"
+                       "被吃掉的词会离开悬浮栏几分钟，之后随识别重新出现")
+            .arg(eaten)
+            .arg(qMax(1, goal))
+            .arg(familiar)
+            .arg(seen)
+            .arg(percent));
+}
+
+void OverlayBar::setEmptyHint(const QString& text)
+{
+    if (!m_hint)
+        return;
+    m_hint->setText(text.isEmpty() ? QStringLiteral("等屏幕上的英文出现生词…") : text);
+}
+
 QRect OverlayBar::popupGeometry() const
 {
     if (m_card && m_card->isVisible())
@@ -444,10 +474,11 @@ void OverlayBar::setWords(const QVector<WordEntry>& words)
     // otherwise a pointer resting on the bar keeps the chips blue forever.
     refreshFreshness();
 
-    // A new word list invalidates the idle animation: whatever the pet already
-    // nibbled away comes back so the strip matches the session again.
+    // A new word list invalidates an in-flight snack (the word it was heading
+    // for may be gone), but a meal that just finished keeps its meaning bubble:
+    // the list changes on every scan and the user needs time to read it.
     if (changed)
-        cancelSnack();
+        cancelSnackFlight();
 
     // While the pointer is on (or near) the bar, or a card is open, freeze the
     // whole layout: re-ordering would slide the chips out from under the cursor.
@@ -647,6 +678,7 @@ void OverlayBar::measureChipBudget()
         ++fixedWidgets;
     };
     addFixed(m_pet);
+    addFixed(m_stats);
     addFixed(m_status);
     addFixed(m_hint);
     addFixed(m_count);
@@ -731,19 +763,22 @@ void OverlayBar::layoutChips()
     measureChipBudget();
     const QVector<QVector<WordChip*>> pages = paginateChips();
     const int pageCount = qMax(1, pages.size());
+    // The list can shrink when the pet eats; stay on the nearest valid page
+    // instead of jumping back to the first one.
     if (m_page >= pageCount)
-        m_page = 0;
+        m_page = pageCount - 1;
 
     // Keep the strip at a constant width so the page pill (and everything to its
     // right) stays put while the pet nibbles words away.
     m_chipHost->setFixedWidth(qMax(60, m_chipBudget - (pageCount > 1 ? pagePillWidth() : 0) - 2));
 
-    // Words the pet has eaten stay hidden until the page is turned; everything
-    // else on the current page is shown at its full width.
+    // Only the current page is laid out; the words the pet swallowed are already
+    // gone from the session (see WordSession::markEaten), so no per-chip filter
+    // is needed here.
     for (WordChip* chip : m_chips)
         chip->hide();
     for (WordChip* chip : pages.value(m_page))
-        chip->setVisible(!m_eaten.contains(chip->word()));
+        chip->show();
 
     if (pageCount > 1) {
         m_pageBtn->setText(QStringLiteral("%1/%2").arg(m_page + 1).arg(pageCount));
@@ -763,7 +798,6 @@ void OverlayBar::nextPage()
     if (pages.size() <= 1)
         return;
     m_page = (m_page + 1) % pages.size();
-    m_eaten.clear();
     if (m_flyAnim && m_flyAnim->state() == QAbstractAnimation::Running)
         m_flyAnim->stop();
     if (m_flyWord)
@@ -817,14 +851,13 @@ void OverlayBar::startSnack()
     }
 
     if (!victim) {
-        // The page is already empty: turn to the next one and let the pet rest
-        // for a moment before the next snack.
+        // Everything on this page already left the bar (the list shrank under
+        // us). Turn the page when there is another one, otherwise wait for new
+        // words to arrive.
         if (pages.size() > 1) {
             nextPage();
             scheduleSnack(2600);
         } else {
-            m_eaten.clear();
-            layoutChips();
             scheduleSnack(5000);
         }
         return;
@@ -887,32 +920,10 @@ void OverlayBar::finishSnack()
 
     if (m_pet)
         m_pet->eat(word);
-    m_eaten.insert(word);
-    layoutChips();
 
-    // Page finished → turn to the next one; after the last page, wrap to the
-    // first page with all its words restored. The flip is done inline (instead
-    // of nextPage()) so the meaning bubble for the last word of the page stays
-    // on screen: the user just watched that word disappear.
-    const QVector<QVector<WordChip*>> pages = paginateChips();
-    bool anyLeft = false;
-    for (WordChip* chip : pages.value(m_page)) {
-        if (!m_eaten.contains(chip->word())) {
-            anyLeft = true;
-            break;
-        }
-    }
-
-    if (!anyLeft && !pages.isEmpty()) {
-        if (pages.size() > 1) {
-            m_page = (m_page + 1) % pages.size();
-            m_eaten.clear();
-            layoutChips();
-        } else {
-            m_eaten.clear();
-            layoutChips();
-        }
-    }
+    // The session hides the word for its digestion cooldown; AppController
+    // refreshes the bar from the session, so the chip leaves the strip.
+    emit wordEaten(word);
 
     // Show the word with its meaning, like the pet showing what it is chewing.
     if (m_dictionary && m_dictionary->isLoaded() && !pointerIsNearBar()) {
@@ -925,28 +936,33 @@ void OverlayBar::finishSnack()
 
     // Slower than the old purely decorative pace: the bubble needs a moment to
     // be read before the next word flies in.
-    scheduleSnack(anyLeft ? randomBetween(2800, 4200) : randomBetween(3000, 4400));
+    scheduleSnack(randomBetween(2800, 4200));
 }
 
 void OverlayBar::cancelSnack()
 {
+    cancelSnackFlight();
+    if (m_snackBubble)
+        m_snackBubble->hideNow();
+}
+
+void OverlayBar::cancelSnackFlight()
+{
+    const bool wasFlying =
+        m_flyAnim && m_flyAnim->state() == QAbstractAnimation::Running;
     if (m_snackTimer)
         m_snackTimer->stop();
-    if (m_flyAnim && m_flyAnim->state() == QAbstractAnimation::Running)
+    if (wasFlying)
         m_flyAnim->stop();
     if (m_flyWord)
         m_flyWord->hide();
-    if (m_snackBubble)
-        m_snackBubble->hideNow();
     m_snackWord.clear();
     m_snackChip = nullptr;
 
-    if (m_eaten.isEmpty())
-        return;
-    m_eaten.clear();
-    // The words come back immediately: the pointer is heading for the bar and
-    // the user expects to see the whole list.
-    layoutChips();
+    // A cancelled flight must put the half-eaten word back; a finished meal is
+    // already hidden by the session and stays eaten.
+    if (wasFlying)
+        layoutChips();
 }
 
 bool OverlayBar::pointerIsOnBar() const

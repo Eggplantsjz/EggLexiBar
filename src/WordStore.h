@@ -37,6 +37,22 @@ public:
     FilterState filterState() const;
     void saveFilterState(const FilterState& state);
 
+    /// Today's pet stats: how many distinct words were seen, eaten by the pet,
+    /// and are considered familiar (eaten / marked known / retired by the
+    /// memory curve). All three are per-calendar-day counters.
+    struct DailyStats
+    {
+        int seen = 0;
+        int eaten = 0;
+        int familiar = 0;
+    };
+
+    void recordSeen(const QStringList& words, const QString& day);
+    void recordEaten(const QStringList& words, const QString& day);
+    void recordKnown(const QStringList& words, const QString& day);
+    void recordRetired(const QStringList& words, const QString& day);
+    DailyStats dailyStats(const QString& day) const;
+
     /// One-time import of legacy ini-backed vocabulary into the database. Only
     /// transfers fields that are non-empty in \a cfg (already-lowercased lists).
     void migrateFromIni(const AppConfig& cfg);

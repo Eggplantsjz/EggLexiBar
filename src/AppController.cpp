@@ -10,6 +10,7 @@
 #include <QAction>
 #include <QApplication>
 #include <QClipboard>
+#include <QDate>
 #include <QDateTime>
 #include <QDir>
 #include <QElapsedTimer>
@@ -188,6 +189,7 @@ void AppController::start()
 
     m_bar->applyConfig(m_cfg);
     m_bar->show();
+    refreshPetStats();
 
     if (!m_hotkeyOk) {
         m_bar->flashMessage(QStringLiteral("快捷键 Ctrl+Alt+W 被占用"));
@@ -232,6 +234,18 @@ void AppController::createUi()
             [this](const QString& word) { blockWords({word}); });
     connect(m_bar, &OverlayBar::wordInspected, this,
             [this](const QString& word) { m_session.touchInteraction(word); });
+    connect(m_bar, &OverlayBar::wordEaten, this, [this](const QString& word) {
+        // The pet ate a word while idle: it leaves the bar for a few minutes and
+        // comes back with a later scan. It is NOT marked known — the user never
+        // said they know it.
+        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        const qint64 cooldown = qint64(qMax(10, m_cfg.snackCooldownSeconds)) * 1000;
+        if (m_session.markEaten(word, now, cooldown))
+            m_store.recordEaten({word}, todayKey());
+        // No setWords() here: that would cancel the meaning bubble the bar just
+        // opened. The next scan pushes the shortened list.
+        refreshPetStats();
+    });
     connect(m_bar, &OverlayBar::barMoved, this, [this](const QPoint& pos) {
         m_cfg.barPos = pos;
         m_cfg.barPosSet = true;
@@ -434,9 +448,7 @@ void AppController::tick()
         const double difference = count > 0 ? double(sum) / count : 0.0;
         if (difference < 1.0 && now - m_lastOcrAt < 120000) {
             m_session.touchRecent(now);
-            const QVector<WordEntry> active = m_session.active(now, activeTtlMs());
-            m_bar->setWords(active);
-            m_lastActiveWords = active.size();
+            syncBarWords(now);
             m_bar->setStatus(QStringLiteral("无变化"), QStringLiteral("idle"));
             return;
         }
@@ -545,14 +557,29 @@ void AppController::handleOcr(const OcrResult& result, qint64 stamp)
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
     m_session.ingest(kept, now);
 
+    // Remember what the user saw today: the pet meter reports the share of
+    // today's words that are already familiar against this denominator.
+    QStringList seenWords;
+    seenWords.reserve(kept.size());
+    for (const WordHit& hit : kept) {
+        if (!seenWords.contains(hit.text))
+            seenWords.append(hit.text);
+    }
+    if (!seenWords.isEmpty())
+        m_store.recordSeen(seenWords, todayKey());
+
     // Reactivate words whose memory-curve interval has elapsed, then hide words
     // that keep appearing without any user interaction. Auto-filtering never
     // touches knownWords — only an explicit swipe/menu/list action marks known.
     m_session.resurface(now);
     int retired = 0;
     if (m_cfg.autoFilter) {
+        QStringList retiredWords;
         retired = m_session.autoFilter(now, m_cfg.autoFilterScans,
-                                       qMax(0, m_cfg.autoFilterSeconds) * 1000);
+                                       qMax(0, m_cfg.autoFilterSeconds) * 1000,
+                                       &retiredWords);
+        if (!retiredWords.isEmpty())
+            m_store.recordRetired(retiredWords, todayKey());
     }
 
     // Persist filter state so the curve keeps advancing across restarts. The
@@ -563,10 +590,8 @@ void AppController::handleOcr(const OcrResult& result, qint64 stamp)
         m_store.saveFilterState(m_session.persistFilter());
     }
 
-    const QVector<WordEntry> active = sortedByDifficulty(m_session.active(now, activeTtlMs()));
-    m_bar->setWords(active);
+    syncBarWords(now);
     m_lastElapsedMs = result.elapsedMs;
-    m_lastActiveWords = active.size();
     updateBarStatus();
     if (retired > 0) {
         m_bar->flashMessage(QStringLiteral("已自动过滤 %1 个词 · 稍后会重现").arg(retired));
@@ -603,8 +628,39 @@ int AppController::activeTtlMs() const
 
 void AppController::refreshWords()
 {
-    m_bar->setWords(sortedByDifficulty(
-        m_session.active(QDateTime::currentMSecsSinceEpoch(), activeTtlMs())));
+    syncBarWords(QDateTime::currentMSecsSinceEpoch());
+}
+
+void AppController::syncBarWords(qint64 nowMs)
+{
+    if (!m_bar)
+        return;
+
+    const QVector<WordEntry> active =
+        sortedByDifficulty(m_session.active(nowMs, activeTtlMs()));
+    m_bar->setWords(active);
+    m_lastActiveWords = active.size();
+
+    // The strip is empty because the pet swallowed everything: say so instead
+    // of leaving a blank bar that looks broken.
+    m_bar->setEmptyHint(active.isEmpty() && m_session.digestingCount(nowMs) > 0
+                            ? QStringLiteral("茄子吃饱了，正在消化…")
+                            : QString());
+    refreshPetStats();
+}
+
+QString AppController::todayKey() const
+{
+    return QDate::currentDate().toString(QStringLiteral("yyyy-MM-dd"));
+}
+
+void AppController::refreshPetStats()
+{
+    if (!m_bar)
+        return;
+    const WordStore::DailyStats stats = m_store.dailyStats(todayKey());
+    m_bar->setPetStats(stats.eaten, stats.familiar, stats.seen,
+                       qMax(1, m_cfg.snackGoalPerDay));
 }
 
 QVector<WordEntry> AppController::sortedByDifficulty(QVector<WordEntry> words) const
@@ -682,6 +738,7 @@ void AppController::markKnown(const QStringList& words)
         m_session.removeWord(word);
     }
     m_store.addKnown(words);
+    m_store.recordKnown(words, todayKey());
     m_filter.setConfig(m_cfg);
     refreshWords();
     m_bar->flashMessage(words.size() == 1
@@ -702,6 +759,9 @@ void AppController::blockWords(const QStringList& words)
         m_session.removeWord(word);
     }
     m_store.addBlocked(words);
+    // Hidden words leave the rotation as well, so they count as familiar in the
+    // pet meter.
+    m_store.recordRetired(words, todayKey());
     m_filter.setConfig(m_cfg);
     refreshWords();
     m_bar->flashMessage(words.size() == 1

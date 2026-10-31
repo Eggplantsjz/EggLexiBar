@@ -40,6 +40,10 @@ struct AppConfig
     bool barPosSet = false;
     QPoint barPos;
 
+    // --- pixel pet ---
+    int snackCooldownSeconds = 180; ///< eaten words stay off the bar this long
+    int snackGoalPerDay = 20;       ///< words eaten per day counts as a full belly
+
     // --- OCR engine ---
     QString language = QStringLiteral("eng");
     QString tesseractPath;  ///< empty = auto detect

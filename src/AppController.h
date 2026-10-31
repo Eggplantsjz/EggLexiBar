@@ -79,6 +79,12 @@ private:
     void updateBarStatus();
     int activeTtlMs() const;
     void refreshWords();
+    /// Pushes the session's active words to the bar, then updates the empty
+    /// hint and the pet meter so all three always describe the same list.
+    void syncBarWords(qint64 nowMs);
+    /// "YYYY-MM-DD" — the key of today's row in the daily pet counters.
+    QString todayKey() const;
+    void refreshPetStats();
     QVector<WordEntry> sortedByDifficulty(QVector<WordEntry> words) const;
     QRect interestRect(const QRect& screenGeometry) const;
     QVector<QRect> exclusionRects(const QSize& imageSize, const QPoint& imageOffset) const;

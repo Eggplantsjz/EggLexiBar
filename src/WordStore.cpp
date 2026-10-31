@@ -60,6 +60,21 @@ void WordStore::ensureSchema()
         " word TEXT PRIMARY KEY COLLATE NOCASE,"
         " round INTEGER NOT NULL DEFAULT 0,"
         " hidden_until INTEGER NOT NULL DEFAULT 0)"));
+    // Per-day pet counters. A row exists for every word that showed up on the
+    // bar that day; the flags are turned on when the pet eats it, the user marks
+    // it known or the memory curve retires it.
+    q.exec(QStringLiteral(
+        "CREATE TABLE IF NOT EXISTS daily_word ("
+        " day TEXT NOT NULL,"
+        " word TEXT NOT NULL COLLATE NOCASE,"
+        " eaten INTEGER NOT NULL DEFAULT 0,"
+        " known INTEGER NOT NULL DEFAULT 0,"
+        " retired INTEGER NOT NULL DEFAULT 0,"
+        " PRIMARY KEY (day, word))"));
+    q.exec(QStringLiteral("CREATE INDEX IF NOT EXISTS daily_word_day ON daily_word(day)"));
+    // Keep roughly a quarter of history; the pet only reports on today.
+    q.exec(QStringLiteral(
+        "DELETE FROM daily_word WHERE day < date('now', '-120 days')"));
 }
 
 bool WordStore::open(const QString& dbPath, QString* error)
@@ -188,6 +203,105 @@ void WordStore::saveFilterState(const FilterState& state)
         ins.exec();
     }
     db.commit();
+}
+
+void WordStore::recordSeen(const QStringList& words, const QString& day)
+{
+    if (!isOpen() || words.isEmpty() || day.isEmpty())
+        return;
+    QSqlDatabase db = QSqlDatabase::database(m_connection);
+    db.transaction();
+    QSqlQuery q(db);
+    q.prepare(QStringLiteral(
+        "INSERT OR IGNORE INTO daily_word (day, word) VALUES (?, ?)"));
+    for (const QString& word : words) {
+        const QString w = word.trimmed().toLower();
+        if (w.isEmpty())
+            continue;
+        q.addBindValue(day);
+        q.addBindValue(w);
+        q.exec();
+    }
+    db.commit();
+}
+
+namespace {
+
+/// Turns one flag column on for every word, creating the day row if the word
+/// was not recorded as seen yet (e.g. it was marked known from the list).
+void markDailyFlag(QSqlDatabase& db, const QStringList& words,
+                   const QString& day, const QString& column)
+{
+    if (!db.isOpen() || words.isEmpty() || day.isEmpty())
+        return;
+
+    db.transaction();
+    QSqlQuery insert(db);
+    insert.prepare(QStringLiteral(
+        "INSERT OR IGNORE INTO daily_word (day, word) VALUES (?, ?)"));
+    QSqlQuery update(db);
+    update.prepare(QStringLiteral(
+                       "UPDATE daily_word SET %1 = 1 WHERE day = ? AND word = ?")
+                       .arg(column));
+    for (const QString& word : words) {
+        const QString w = word.trimmed().toLower();
+        if (w.isEmpty())
+            continue;
+        insert.addBindValue(day);
+        insert.addBindValue(w);
+        insert.exec();
+        update.addBindValue(day);
+        update.addBindValue(w);
+        update.exec();
+    }
+    db.commit();
+}
+
+} // namespace
+
+void WordStore::recordEaten(const QStringList& words, const QString& day)
+{
+    if (!isOpen())
+        return;
+    QSqlDatabase db = QSqlDatabase::database(m_connection);
+    markDailyFlag(db, words, day, QStringLiteral("eaten"));
+}
+
+void WordStore::recordKnown(const QStringList& words, const QString& day)
+{
+    if (!isOpen())
+        return;
+    QSqlDatabase db = QSqlDatabase::database(m_connection);
+    markDailyFlag(db, words, day, QStringLiteral("known"));
+}
+
+void WordStore::recordRetired(const QStringList& words, const QString& day)
+{
+    if (!isOpen())
+        return;
+    QSqlDatabase db = QSqlDatabase::database(m_connection);
+    markDailyFlag(db, words, day, QStringLiteral("retired"));
+}
+
+WordStore::DailyStats WordStore::dailyStats(const QString& day) const
+{
+    DailyStats stats;
+    if (!isOpen() || day.isEmpty())
+        return stats;
+
+    const QSqlDatabase db = QSqlDatabase::database(m_connection);
+    QSqlQuery q(db);
+    q.prepare(QStringLiteral(
+        "SELECT COUNT(*), SUM(eaten),"
+        " SUM(CASE WHEN eaten = 1 OR known = 1 OR retired = 1 THEN 1 ELSE 0 END)"
+        " FROM daily_word WHERE day = ?"));
+    q.addBindValue(day);
+    if (q.exec() && q.next()) {
+        stats.seen = q.value(0).toInt();
+        stats.eaten = q.value(1).toInt();
+        stats.familiar = q.value(2).toInt();
+    }
+    return stats;
 }
 
 void WordStore::migrateFromIni(const AppConfig& cfg)

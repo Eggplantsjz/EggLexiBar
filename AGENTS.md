@@ -69,19 +69,29 @@ Tesseract 识别英文，通过词典和用户词表筛选出生词，并在顶�
   依赖刚隐藏了 `m_chipHost` 的行布局 `sizeHint()`，它可能还带着旧缓存，导致只剩
   一颗词条。
 - 空闲时茄子会吃词（`m_snackTimer` → `startSnack()` → 飞行的 `#flyWord` →
-  `finishSnack()`）。被吃的词记在 `m_eaten`，只在当前页隐藏；本页吃完就
-  `m_page = (m_page + 1) % pages` 并清空 `m_eaten`。任何用户交互（进入悬浮栏、按下、
-  悬停词条、暂停、隐藏、词表变化）都要 `cancelSnack()` 并立即把词放回去。
+  `finishSnack()`）。`finishSnack()` 只发 `OverlayBar::wordEaten`，不再自己隐藏词条：
+  词条的隐藏由 `WordSession::markEaten()`（`WordEntry::eatenUntil`，默认 180 s 冷却）
+  负责，`active()` 过滤冷却中的词，下次识别刷新时它自然离开、冷却后自己回来。
+  不要为吃词再加第二份状态（旧的 `OverlayBar::m_eaten` 已删除）。
+- 用户交互（进入悬浮栏、按下、悬停词条、暂停、隐藏、翻页）调用 `cancelSnack()`，
+  它会把飞行中的词放回并收起气泡；单纯的词表变化只调 `cancelSnackFlight()`，
+  否则每次 OCR 刷新都会掐掉正在展示的释义气泡。
 - 吃掉一个词后，`SnackBubble` 在茄子下方（栏在屏幕底部时翻到上方）弹出小气泡，显示
   单词、音标和最多两条释义，约 2.4 s 后淡出。气泡是独立 ToolTip 窗口、
   `WA_TransparentForMouseEvents`、不抢焦点；它的几何必须通过
   `OverlayBar::snackGeometry()` 加入 OCR 排除区，否则识别会读到自己的中文释义。
-- 吃完一页的翻页要写在 `finishSnack()` 里，不要调用 `nextPage()`，否则刚吃掉的词的
-  释义会被立即隐藏。`nextPage()` 只服务页码药丸的点击。
+- 茄子右侧的 `PetStats` 是自绘像素 HUD（3×5 数字、10 格饱腹条、百分比），宽度约
+  96 px，计入 `measureChipBudget()` 的固定控件。数据来自 `WordStore::dailyStats()`：
+  `daily_word(day, word, eaten, known, retired)` 按天累加，熟悉词 = 三者任一。
+  `recordSeen` 在 `handleOcr` 里按当天识别到的生词记账，`recordEaten` / `recordKnown`
+  / `recordRetired` 分别在 `wordEaten`、`markKnown`、`blockWords` 与自动降噪时调用。
+- 全部词都在消化时 `AppController::syncBarWords()` 调 `setEmptyHint("茄子吃饱了，正在消化…")`，
+  词条回来后自动恢复默认提示；不要让它变成永久的空栏提示。
 - 指针靠近悬浮栏时仍冻结词条的增删和整栏宽度；暂停/错误的状态文字出现或消失
   也等指针离开后再应用，避免按钮在指针下移动。
 - 修改布局后确认：多词时每颗胶囊文字完整、间距清楚、页码与 `N 生词` 对得上；茄子
-  识别时会动、暂停时闭眼变色、空闲时会吃词且翻页后复原；空栏显示提示而不是空白。
+  识别时会动、暂停时闭眼变色、空闲时会吃词并显示释义气泡、吃掉的词冷却后回来；
+  空栏显示提示而不是空白。
 
 ## 构建与启动
 

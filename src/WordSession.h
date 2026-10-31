@@ -19,6 +19,7 @@ struct WordEntry
     bool autoFiltered = false; ///< hidden by the memory-curve auto filter (NOT "known")
     int filterCount = 0;       ///< how many times it has been auto-filtered
     qint64 hiddenUntil = 0;    ///< earliest time it is allowed to reappear
+    qint64 eatenUntil = 0;     ///< the pet ate it; back on the bar after this
     bool interacted = false;   ///< the user hovered/clicked it at least once
     QRect lastBox;
 };
@@ -64,8 +65,10 @@ public:
 
     /// Hides words that were seen in at least \a minScans batches, have been
     /// around for \a minAgeMs and were never interacted with. Each hide extends
-    /// the memory-curve interval. Returns how many were hidden.
-    int autoFilter(qint64 nowMs, int minScans, int minAgeMs);
+    /// the memory-curve interval. Returns how many were hidden; when
+    /// \a hiddenWords is given it receives their spellings (for daily stats).
+    int autoFilter(qint64 nowMs, int minScans, int minAgeMs,
+                   QStringList* hiddenWords = nullptr);
 
     /// Re-activates auto-filtered words whose memory-curve interval has elapsed.
     void resurface(qint64 nowMs);
@@ -73,6 +76,13 @@ public:
     /// Manually restores a word the user wants back (from the details list):
     /// clears filtering, resets the curve, and marks it interacted.
     bool restoreWord(const QString& word);
+
+    /// The pet ate \a word: it leaves the bar for \a cooldownMs and comes back
+    /// on the next refresh after that, without being marked known.
+    bool markEaten(const QString& word, qint64 nowMs, qint64 cooldownMs);
+
+    /// How many words are currently in the pet's belly (hidden by markEaten).
+    int digestingCount(qint64 nowMs) const;
 
     int filteredCount() const;
 

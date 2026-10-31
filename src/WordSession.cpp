@@ -79,6 +79,8 @@ QVector<WordEntry> WordSession::active(qint64 nowMs, int ttlMs) const
     for (const WordEntry& entry : m_words) {
         if (entry.autoFiltered)
             continue;
+        if (entry.eatenUntil > nowMs)
+            continue;   // the pet is still digesting it
         if (keepForever || entry.lastSeen >= threshold)
             result.append(entry);
     }
@@ -142,7 +144,8 @@ void WordSession::touchInteraction(const QString& word)
     }
 }
 
-int WordSession::autoFilter(qint64 nowMs, int minScans, int minAgeMs)
+int WordSession::autoFilter(qint64 nowMs, int minScans, int minAgeMs,
+                            QStringList* hiddenWords)
 {
     const int scansNeeded = std::max(2, minScans);
     const qint64 ageNeeded = std::max(0LL, qint64(minAgeMs));
@@ -150,6 +153,10 @@ int WordSession::autoFilter(qint64 nowMs, int minScans, int minAgeMs)
     for (auto it = m_words.begin(); it != m_words.end(); ++it) {
         WordEntry& entry = it.value();
         if (entry.autoFiltered || entry.interacted)
+            continue;
+        // A word the pet is digesting is not on screen; do not retire it behind
+        // the scenes while it is invisible.
+        if (entry.eatenUntil > nowMs)
             continue;
         if (entry.scans < scansNeeded)
             continue;
@@ -160,6 +167,8 @@ int WordSession::autoFilter(qint64 nowMs, int minScans, int minAgeMs)
         entry.hiddenUntil = nowMs + filterIntervalMs(entry.filterCount);
         entry.autoFiltered = true;
         m_persistFilter.insert(it.key(), qMakePair(entry.filterCount, entry.hiddenUntil));
+        if (hiddenWords)
+            hiddenWords->append(it.key());
         ++hidden;
     }
     return hidden;
@@ -172,7 +181,31 @@ void WordSession::resurface(qint64 nowMs)
         if (entry.autoFiltered && entry.hiddenUntil <= nowMs) {
             entry.autoFiltered = false;
         }
+        if (entry.eatenUntil > 0 && entry.eatenUntil <= nowMs)
+            entry.eatenUntil = 0;
     }
+}
+
+bool WordSession::markEaten(const QString& word, qint64 nowMs, qint64 cooldownMs)
+{
+    auto it = m_words.find(word);
+    if (it == m_words.end())
+        return false;
+    it->eatenUntil = nowMs + std::max<qint64>(0, cooldownMs);
+    // Keep the entry alive so it can come back even if the user's screen no
+    // longer shows the word for a while.
+    it->lastSeen = nowMs;
+    return true;
+}
+
+int WordSession::digestingCount(qint64 nowMs) const
+{
+    int count = 0;
+    for (const WordEntry& entry : m_words) {
+        if (entry.eatenUntil > nowMs)
+            ++count;
+    }
+    return count;
 }
 
 bool WordSession::restoreWord(const QString& word)
@@ -183,6 +216,7 @@ bool WordSession::restoreWord(const QString& word)
     it->autoFiltered = false;
     it->filterCount = 0;
     it->hiddenUntil = 0;
+    it->eatenUntil = 0;
     it->interacted = true;
     it->lastSeen = QDateTime::currentMSecsSinceEpoch();
     m_persistFilter.remove(word);

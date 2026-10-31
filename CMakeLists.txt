@@ -47,6 +47,7 @@ set(GUI_SOURCES
     src/SettingsDialog.cpp
     src/HotkeyFilter.cpp
     src/PetWidget.cpp
+    src/PetStats.cpp
     src/RegionSelector.cpp
 )
 
